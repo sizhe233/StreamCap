@@ -4,10 +4,11 @@ FastAPI服务器，提供录制控制API接口
 import asyncio
 import threading
 from typing import Optional, Dict, Any
-from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException, BackgroundTasks
-from pydantic import BaseModel
+from fastapi import FastAPI, HTTPException, BackgroundTasks
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel, Field
 import uvicorn
 
 from ..utils.logger import logger
@@ -15,24 +16,97 @@ from ..core.platforms.platform_handlers import CustomHandler
 
 
 class RecordRequest(BaseModel):
-    """录制请求模型"""
-    anchor_name: str  # 主播名称
-    stream_url: str   # FLV/HLS流地址
-    record_quality: str = "OD"  # 录制质量，默认为OD（原画）
-    output_dir: Optional[str] = None  # 输出目录，默认为None使用系统设置
+    """
+    录制请求模型
+    
+    用于开始录制直播的请求参数
+    """
+    anchor_name: str = Field(
+        ..., 
+        description="主播名称",
+        example="测试主播001",
+        min_length=1,
+        max_length=100
+    )
+    stream_url: str = Field(
+        ..., 
+        description="FLV或HLS流地址，必须包含.flv或.m3u8",
+        example="https://example.com/live/stream.flv"
+    )
+    record_quality: str = Field(
+        default="OD", 
+        description="录制质量：OD(原画)、UHD(4K)、HD(1080p)、SD(720p)、LD(480p)",
+        example="OD"
+    )
+    output_dir: Optional[str] = Field(
+        default=None, 
+        description="输出目录路径，为空时使用系统默认设置",
+        example="D:/录制文件/主播001"
+    )
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "anchor_name": "测试主播001",
+                "stream_url": "https://example.com/live/stream.flv",
+                "record_quality": "OD",
+                "output_dir": "D:/录制文件/主播001"
+            }
+        }
 
 
 class RecordResponse(BaseModel):
-    """录制响应模型"""
-    success: bool
-    message: str
-    record_id: Optional[str] = None
+    """
+    录制响应模型
+    
+    录制操作的返回结果
+    """
+    success: bool = Field(
+        ..., 
+        description="操作是否成功"
+    )
+    message: str = Field(
+        ..., 
+        description="操作结果消息"
+    )
+    record_id: Optional[str] = Field(
+        default=None, 
+        description="录制任务ID，成功时返回"
+    )
+
+    class Config:
+        schema_extra = {
+            "example": {
+                "success": True,
+                "message": "成功开始录制 测试主播001",
+                "record_id": "abc123def456"
+            }
+        }
 
 
 class StopRecordRequest(BaseModel):
-    """停止录制请求模型"""
-    record_id: Optional[str] = None
-    anchor_name: Optional[str] = None
+    """
+    停止录制请求模型
+    
+    用于停止录制的请求参数，record_id 和 anchor_name 二选一
+    """
+    record_id: Optional[str] = Field(
+        default=None, 
+        description="录制任务ID（通过开始录制接口获得）",
+        example="abc123def456"
+    )
+    anchor_name: Optional[str] = Field(
+        default=None, 
+        description="主播名称（精确匹配）",
+        example="测试主播001"
+    )
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "record_id": "abc123def456"
+            }
+        }
 
 
 class FastAPIServer:
@@ -48,9 +122,52 @@ class FastAPIServer:
         
         # 创建FastAPI应用
         self.fastapi_app = FastAPI(
-            title="StreamCap API",
-            description="直播录制控制API",
-            version="1.0.0"
+            title="StreamCap 直播录制 API",
+            description="""
+## StreamCap 直播录制控制 API
+
+这是一个用于控制直播录制的 RESTful API 服务。
+
+### 主要功能
+- 🎥 **开始录制**: 通过提供主播名称和流地址开始录制
+- ⏹️ **停止录制**: 根据录制ID或主播名称停止录制
+- 📊 **状态查询**: 查看所有录制任务或单个主播的录制状态
+- 🔍 **模糊搜索**: 支持使用通配符(%)进行主播名称模糊匹配
+
+### 支持的流格式
+- FLV 格式 (.flv)
+- HLS 格式 (.m3u8)
+
+### 录制质量选项
+- **OD**: 原画质量
+- **UHD**: 超高清 (4K)
+- **HD**: 高清 (1080p)
+- **SD**: 标清 (720p)
+- **LD**: 流畅 (480p)
+
+### 使用说明
+1. 首先调用 `/record/start` 开始录制
+2. 使用 `/record/status` 查看录制状态
+3. 需要时调用 `/record/stop` 停止录制
+            """,
+            version="1.0.0",
+            contact={
+                "name": "StreamCap 开发团队",
+                "url": "https://github.com/your-repo/streamcap",
+            },
+            license_info={
+                "name": "MIT License",
+                "url": "https://opensource.org/licenses/MIT",
+            },
+        )
+        
+        # 添加CORS中间件
+        self.fastapi_app.add_middleware(
+            CORSMiddleware,
+            allow_origins=["*"],  # 允许所有来源，生产环境建议指定具体域名
+            allow_credentials=True,
+            allow_methods=["*"],  # 允许所有HTTP方法
+            allow_headers=["*"],  # 允许所有请求头
         )
         
         # 注册路由
@@ -59,17 +176,74 @@ class FastAPIServer:
     def _setup_routes(self):
         """设置API路由"""
         
-        @self.fastapi_app.get("/")
+        @self.fastapi_app.get(
+            "/",
+            summary="API 根路径",
+            description="返回 API 服务器的基本信息和运行状态",
+            tags=["系统信息"]
+        )
         async def root():
+            """
+            ## API 根路径
+            
+            返回 StreamCap API 服务器的基本信息。
+            
+            **返回信息:**
+            - 服务器名称
+            - 运行状态
+            """
             return {"message": "StreamCap API Server", "status": "running"}
         
-        @self.fastapi_app.get("/health")
+        @self.fastapi_app.get(
+            "/health",
+            summary="健康检查",
+            description="检查 API 服务器的健康状态",
+            tags=["系统信息"]
+        )
         async def health_check():
+            """
+            ## 健康检查端点
+            
+            用于监控和检查 API 服务器是否正常运行。
+            
+            **返回信息:**
+            - 服务器健康状态
+            - 服务器运行状态
+            """
             return {"status": "healthy", "server_running": self.is_running}
         
-        @self.fastapi_app.post("/record/start", response_model=RecordResponse)
+        @self.fastapi_app.post(
+            "/record/start", 
+            response_model=RecordResponse,
+            summary="开始录制直播",
+            description="根据提供的主播名称和流地址开始录制直播",
+            tags=["录制控制"]
+        )
         async def start_record(request: RecordRequest, background_tasks: BackgroundTasks):
-            """开始录制直播"""
+            """
+            ## 开始录制直播
+            
+            根据提供的主播名称和流地址开始录制直播。
+            
+            **请求参数:**
+            - `anchor_name`: 主播名称（必填）
+            - `stream_url`: FLV 或 HLS 流地址（必填）
+            - `record_quality`: 录制质量，可选值：OD（原画）、UHD（4K）、HD（1080p）、SD（720p）、LD（480p）
+            - `output_dir`: 输出目录（可选，默认使用系统设置）
+            
+            **支持的流格式:**
+            - FLV 格式：包含 .flv 的 URL
+            - HLS 格式：包含 .m3u8 的 URL
+            
+            **返回结果:**
+            - `success`: 是否成功
+            - `message`: 操作结果消息
+            - `record_id`: 录制任务ID（成功时返回）
+            
+            **注意事项:**
+            - 同一主播名称只能有一个录制任务
+            - 流地址必须是有效的 FLV 或 M3U8 格式
+            """
             try:
                 if not self.app_manager:
                     raise HTTPException(status_code=500, detail="应用管理器未初始化")
@@ -107,7 +281,7 @@ class FastAPIServer:
                 record_id = await self._start_recording_task(
                     record_manager, 
                     stream_data, 
-                    request.output_dir
+                    request
                 )
                 
                 logger.info(f"通过API开始录制: {request.anchor_name} - {request.stream_url}")
@@ -124,9 +298,44 @@ class FastAPIServer:
                 logger.error(f"API录制启动失败: {str(e)}")
                 raise HTTPException(status_code=500, detail=f"录制启动失败: {str(e)}")
         
-        @self.fastapi_app.post("/record/stop", response_model=RecordResponse)
+        @self.fastapi_app.post(
+            "/record/stop", 
+            response_model=RecordResponse,
+            summary="停止录制",
+            description="根据录制ID或主播名称停止正在进行的录制任务",
+            tags=["录制控制"]
+        )
         async def stop_record(request: StopRecordRequest):
-            """停止录制"""
+            """
+            ## 停止录制
+            
+            根据录制ID或主播名称停止正在进行的录制任务。
+            
+            **请求参数（二选一）:**
+            - `record_id`: 录制任务ID（通过开始录制接口获得）
+            - `anchor_name`: 主播名称（精确匹配）
+            
+            **返回结果:**
+            - `success`: 是否成功停止
+            - `message`: 操作结果消息
+            
+            **使用示例:**
+            ```json
+            // 通过录制ID停止
+            {
+                "record_id": "abc123def456"
+            }
+            
+            // 通过主播名称停止
+            {
+                "anchor_name": "主播名称"
+            }
+            ```
+            
+            **注意事项:**
+            - 必须提供 record_id 或 anchor_name 其中之一
+            - 如果录制任务不存在，将返回失败信息
+            """
             try:
                 if not self.app_manager:
                     raise HTTPException(status_code=500, detail="应用管理器未初始化")
@@ -162,9 +371,37 @@ class FastAPIServer:
                 logger.error(f"API录制停止失败: {str(e)}")
                 raise HTTPException(status_code=500, detail=f"录制停止失败: {str(e)}")
         
-        @self.fastapi_app.get("/record/status")
+        @self.fastapi_app.get(
+            "/record/status",
+            summary="获取所有录制状态",
+            description="获取当前所有活跃录制任务的状态信息",
+            tags=["状态查询"]
+        )
         async def get_record_status():
-            """获取录制状态"""
+            """
+            ## 获取所有录制状态
+            
+            获取当前所有活跃录制任务的状态信息。
+            
+            **返回结果:**
+            - `active_records`: 活跃录制任务列表
+            - `total_count`: 活跃录制任务总数
+            
+            **录制任务信息包含:**
+            - `record_id`: 录制任务ID
+            - `anchor_name`: 主播名称
+            - `stream_url`: 流地址
+            - `is_monitoring`: 是否正在监控
+            - `is_recording`: 是否正在录制
+            - `status`: 当前状态描述
+            - `start_time`: 开始时间（如果已开始）
+            
+            **状态说明:**
+            - `监控中`: 正在监控直播状态，等待开播
+            - `录制中`: 正在录制直播内容
+            - `已停止监控`: 监控已停止
+            - `录制错误`: 录制过程中出现错误
+            """
             try:
                 if not self.app_manager or not self.app_manager.record_manager:
                     return {"active_records": [], "total_count": 0}
@@ -181,9 +418,57 @@ class FastAPIServer:
                 logger.error(f"获取录制状态失败: {str(e)}")
                 raise HTTPException(status_code=500, detail=f"获取状态失败: {str(e)}")
         
-        @self.fastapi_app.get("/record/status/{anchor_name}")
+        @self.fastapi_app.get(
+            "/record/status/{anchor_name}",
+            summary="获取单个主播录制状态",
+            description="获取指定主播的录制状态，支持模糊查询和通配符匹配",
+            tags=["状态查询"]
+        )
         async def get_single_record_status(anchor_name: str):
-            """获取单个主播的录制状态（支持模糊查询）"""
+            """
+            ## 获取单个主播录制状态
+            
+            获取指定主播的录制状态信息，支持模糊查询和通配符匹配。
+            
+            **路径参数:**
+            - `anchor_name`: 主播名称（支持模糊匹配）
+            
+            **模糊查询支持:**
+            - 精确匹配：`主播名称`
+            - 前缀匹配：`主播%`（查找以"主播"开头的）
+            - 后缀匹配：`%名称`（查找以"名称"结尾的）
+            - 包含匹配：`%主播%`（查找包含"主播"的）
+            
+            **返回结果（单个匹配）:**
+            - `record_id`: 录制任务ID
+            - `anchor_name`: 主播名称
+            - `stream_url`: 流地址
+            - `is_monitoring`: 是否正在监控
+            - `is_recording`: 是否正在录制
+            - `status`: 当前状态描述
+            - `quality`: 录制质量
+            - `record_format`: 录制格式
+            - `platform`: 平台信息
+            - `is_live`: 是否正在直播
+            - `live_title`: 直播标题（如果正在直播）
+            - `start_time`: 开始时间（如果已开始）
+            - `last_check_time`: 最后检查时间
+            - `duration`: 录制时长
+            
+            **返回结果（多个匹配）:**
+            - `matched_records`: 匹配的录制任务列表
+            - `total_count`: 匹配数量
+            - `message`: 匹配结果说明
+            
+            **使用示例:**
+            - `/record/status/主播001` - 精确查找
+            - `/record/status/主播%` - 查找所有以"主播"开头的
+            - `/record/status/%测试%` - 查找所有包含"测试"的
+            
+            **错误情况:**
+            - 404: 未找到匹配的录制任务
+            - 500: 服务器内部错误
+            """
             try:
                 if not self.app_manager or not self.app_manager.record_manager:
                     raise HTTPException(status_code=404, detail="未找到指定主播的录制任务")
@@ -238,7 +523,8 @@ class FastAPIServer:
                             "record_format": recording.record_format,
                             "platform": recording.platform,
                             "is_live": getattr(recording, 'is_live', False),
-                            "live_title": getattr(recording, 'live_title', None)
+                            "live_title": getattr(recording, 'live_title', None),
+                            "speed": getattr(recording, 'speed', '0 KB/s')
                         }
                         
                         # 添加时间信息
@@ -275,7 +561,7 @@ class FastAPIServer:
                 logger.error(f"获取单个主播录制状态失败: {str(e)}")
                 raise HTTPException(status_code=500, detail=f"获取状态失败: {str(e)}")
     
-    async def _start_recording_task(self, record_manager, stream_data, output_dir=None):
+    async def _start_recording_task(self, record_manager, stream_data, request):
         """启动录制任务"""
         try:
             from ..models.recording.recording_model import Recording
@@ -284,18 +570,23 @@ class FastAPIServer:
             
             # 创建Recording对象
             recording_data = {
+                "rec_id": str(uuid.uuid4())[:8],
                 "url": stream_data.record_url,
                 "streamer_name": stream_data.anchor_name,
                 "quality": request.record_quality or "OD",
                 "record_format": "flv",  # 使用FLV格式，更安全，异常停止不会损坏文件
                 "segment_record": False,
                 "segment_time": 30,
+                "monitor_status": False,
                 "only_notify_no_record": False,
                 "scheduled_recording": False,
                 "scheduled_start_time": None,
                 "monitor_hours": None,
+                "recording_dir": request.output_dir,
+                "enabled_message_push": False,
                 "platform": "custom",
-                "platform_key": "custom"
+                "platform_key": "custom",
+                "flv_use_direct_download": True
             }
             
             # 创建Recording实例
@@ -361,7 +652,8 @@ class FastAPIServer:
                         "stream_url": recording.url,
                         "is_monitoring": recording.monitor_status,
                         "is_recording": recording.is_recording,
-                        "status": recording.status_info
+                        "status": recording.status_info,
+                        "speed": getattr(recording, 'speed', '0 KB/s')
                     }
                     if recording.start_time:
                         record_info["start_time"] = recording.start_time.isoformat()
