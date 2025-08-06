@@ -16,6 +16,11 @@ def _safe_destroy_window(page):
             return
         for task in to_cancel:
             task.cancel()
+        
+        # 停止FastAPI服务器
+        app = getattr(page, "data", None)
+        if app and hasattr(app, "fastapi_server"):
+            app.fastapi_server.stop_server()
     except Exception as ex:
         logger.error(f"close window error: {ex}")
     finally:
@@ -70,6 +75,9 @@ async def handle_app_close(page: ft.Page, app, save_progress_overlay) -> None:
                 finally:
                     if not getattr(app, "is_web_mode", False) and hasattr(app, "tray_manager"):
                         app.tray_manager.stop()
+                    # 停止FastAPI服务器
+                    if hasattr(app, "fastapi_server"):
+                        app.fastapi_server.stop_server()
                     page.window.destroy()
 
             threading.Thread(target=close_app, daemon=True).start()

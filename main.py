@@ -14,9 +14,11 @@ from app.ui.components.common.save_progress_overlay import SaveProgressOverlay
 from app.ui.layout.responsive_layout import setup_responsive_layout
 from app.ui.views.login_view import LoginPage
 from app.utils.logger import logger
+from app.api.fastapi_server import FastAPIServer
 
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 6006
+DEFAULT_API_PORT = 8000
 WINDOW_SCALE = 0.65
 MIN_WIDTH = 950
 ASSETS_DIR = "assets"
@@ -107,6 +109,17 @@ async def main(page: ft.Page) -> None:
     app.is_web_mode = is_web
     app.is_mobile = False
     
+    # 初始化FastAPI服务器
+    api_port = args.api_port
+    app.fastapi_server = FastAPIServer(app_manager=app, host=DEFAULT_HOST, port=api_port)
+    
+    # 启动FastAPI服务器
+    try:
+        app.fastapi_server.start_server()
+        logger.info(f"FastAPI服务器已启动在 http://{DEFAULT_HOST}:{api_port}")
+    except Exception as e:
+        logger.error(f"FastAPI服务器启动失败: {e}")
+    
     if not is_web:
         try:
             app.tray_manager = TrayManager(app)
@@ -186,6 +199,7 @@ if __name__ == "__main__":
     parser.add_argument("--web", action="store_true", help="Run the app in web mode")
     parser.add_argument("--host", type=str, default=default_host, help=f"Host address (default: {default_host})")
     parser.add_argument("--port", type=int, default=default_port, help=f"Port number (default: {default_port})")
+    parser.add_argument("--api-port", type=int, default=DEFAULT_API_PORT, help=f"API server port (default: {DEFAULT_API_PORT})")
     args = parser.parse_args()
 
     multiprocessing.freeze_support()

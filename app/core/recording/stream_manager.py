@@ -234,11 +234,21 @@ class LiveStreamRecorder:
                 key, value = header_params.split(":", 1)
                 headers[key] = value
 
+            # Create speed update callback
+            def speed_update_callback(total_bytes: int, elapsed_time: float):
+                self.recording.update_speed(total_bytes, elapsed_time)
+                # Update UI asynchronously
+                try:
+                    self.app.page.run_task(self.app.record_card_manager.update_card, self.recording)
+                except Exception as e:
+                    logger.debug(f"Failed to update speed in UI: {e}")
+
             self.direct_downloader = DirectStreamDownloader(
                 record_url=record_url,
                 save_path=save_path,
                 headers=headers,
-                proxy=self.proxy
+                proxy=self.proxy,
+                speed_callback=speed_update_callback
             )
 
             self.app.page.run_task(
@@ -301,9 +311,15 @@ class LiveStreamRecorder:
             logger.info(f"Recording in Progress: {live_url}")
             logger.log("STREAM", f"Recording Stream URL: {record_url}")
 
+            # Start speed monitoring task
+            speed_task = asyncio.create_task(self._monitor_ffmpeg_speed(process, save_file_path))
+
             while True:
                 if not self.recording.is_recording or not self.app.recording_enabled:
                     logger.info(f"Preparing to End Recording: {live_url}")
+                    
+                    # Cancel speed monitoring
+                    speed_task.cancel()
 
                     if os.name == "nt":
                         if process.stdin:
@@ -328,6 +344,7 @@ class LiveStreamRecorder:
 
                 if process.returncode is not None:
                     logger.info(f"Exit loop recording (normal 0 | abnormal 1): code={process.returncode}, {live_url}")
+                    speed_task.cancel()
                     break
 
                 await asyncio.sleep(1)
@@ -440,6 +457,49 @@ class LiveStreamRecorder:
             self.recording.record_url = None
 
         return True
+
+    async def _monitor_ffmpeg_speed(self, process, save_file_path: str):
+        """Monitor FFmpeg recording speed by checking file size"""
+        try:
+            last_size = 0
+            last_time = time.time()
+            
+            while not process.returncode and self.recording.is_recording:
+                await asyncio.sleep(2)  # Check every 2 seconds
+                
+                try:
+                    if os.path.exists(save_file_path):
+                        current_size = os.path.getsize(save_file_path)
+                        current_time = time.time()
+                        
+                        if current_time > last_time:
+                            bytes_diff = current_size - last_size
+                            time_diff = current_time - last_time
+                            
+                            if time_diff > 0:
+                                bytes_per_sec = bytes_diff / time_diff
+                                if bytes_per_sec >= 1024 * 1024:  # MB/s
+                                    self.recording.speed = f"{bytes_per_sec / (1024 * 1024):.1f} MB/s"
+                                else:  # KB/s
+                                    self.recording.speed = f"{bytes_per_sec / 1024:.0f} KB/s"
+                                
+                                # Update UI
+                                try:
+                                    self.app.page.run_task(self.app.record_card_manager.update_card, self.recording)
+                                except Exception as e:
+                                    logger.debug(f"Failed to update speed in UI: {e}")
+                            
+                            last_size = current_size
+                            last_time = current_time
+                    
+                except (OSError, FileNotFoundError):
+                    # File might not exist yet or be temporarily unavailable
+                    pass
+                    
+        except asyncio.CancelledError:
+            logger.debug("FFmpeg speed monitoring cancelled")
+        except Exception as e:
+            logger.debug(f"Error in FFmpeg speed monitoring: {e}")
 
     async def converts_mp4(self, converts_file_path: str, is_original_delete: bool = True) -> None:
         """Asynchronous transcoding method, can be added to the background service to continue execution"""

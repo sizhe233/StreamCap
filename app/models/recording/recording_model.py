@@ -57,7 +57,7 @@ class Recording:
         self.flv_use_direct_download = flv_use_direct_download
         self.scheduled_time_range = None
         self.title = f"{streamer_name} - {self.quality}"
-        self.speed = "X KB/s"
+        self.speed = "0 KB/s"
         self.is_live = False
         self.is_recording = False
         self.start_time = None
@@ -141,3 +141,14 @@ class Recording:
         for attr, value in updated_info.items():
             if hasattr(self, attr):
                 setattr(self, attr, value)
+    
+    def update_speed(self, bytes_downloaded: int, elapsed_time: float):
+        """Update the recording speed based on downloaded bytes and elapsed time."""
+        if elapsed_time > 0:
+            bytes_per_sec = bytes_downloaded / elapsed_time
+            if bytes_per_sec >= 1024 * 1024:  # MB/s
+                self.speed = f"{bytes_per_sec / (1024 * 1024):.1f} MB/s"
+            else:  # KB/s
+                self.speed = f"{bytes_per_sec / 1024:.0f} KB/s"
+        else:
+            self.speed = "0 KB/s"

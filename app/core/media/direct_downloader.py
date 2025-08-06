@@ -18,7 +18,8 @@ class DirectStreamDownloader:
                  save_path: str,
                  headers: Optional[dict[str, str]] = None,
                  proxy: Optional[str] = None,
-                 chunk_size: int = 1024 * 16):  # 16KB chunks
+                 chunk_size: int = 1024 * 16,  # 16KB chunks
+                 speed_callback=None):
         self.record_url = record_url
         self.save_path = save_path
         self.headers = headers or {}
@@ -29,6 +30,8 @@ class DirectStreamDownloader:
         self.download_task = None
         self.total_bytes = 0
         self.start_time = None
+        self.speed_callback = speed_callback
+        self.last_speed_update = 0
 
     async def start_download(self) -> bool:
         self.start_time = time.time()
@@ -64,12 +67,13 @@ class DirectStreamDownloader:
                             f.write(chunk)
                             self.total_bytes += len(chunk)
 
-                            # Please don't remove this comment code
-                            # elapsed = time.time() - self.start_time
-                            # if int(elapsed) % 10 == 0:
-                            #     mb_downloaded = self.total_bytes / (1024 * 1024)
-                            #     mb_per_sec = mb_downloaded / elapsed if elapsed > 0 else 0
-                            #     logger.info(f"Downloaded {mb_downloaded:.2f} MB, Speed: {mb_per_sec:.2f} MB/s")
+                            # Update speed every 2 seconds
+                            current_time = time.time()
+                            if current_time - self.last_speed_update >= 2.0:
+                                elapsed = current_time - self.start_time
+                                if self.speed_callback and elapsed > 0:
+                                    self.speed_callback(self.total_bytes, elapsed)
+                                self.last_speed_update = current_time
 
             logger.success(f"Download Completed: {self.save_path}")
 
