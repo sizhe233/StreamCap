@@ -605,21 +605,32 @@ class FastAPIServer:
                     recording.scheduled_start_time, recording.monitor_hours
                 )
                 
+                logger.info(f"开始UI更新流程 - 主播: {recording.streamer_name}, ID: {recording.rec_id}")
+                
                 # 检查页面和pubsub是否可用
                 if hasattr(self.app_manager, 'page') and self.app_manager.page and hasattr(self.app_manager.page, 'pubsub'):
+                    logger.debug(f"页面和pubsub可用，准备发送通知")
+                    
                     # 通过pubsub通知UI更新，这会触发subscribe_add_cards方法
                     self.app_manager.page.pubsub.send_others_on_topic("add", recording)
-                    logger.info(f"已通过pubsub通知UI更新: {recording.streamer_name}")
+                    logger.info(f"已通过pubsub发送'add'通知: {recording.streamer_name}")
+                    
+                    # 检查当前页面信息
+                    current_page_name = getattr(self.app_manager.current_page, 'page_name', 'Unknown') if self.app_manager.current_page else 'None'
+                    logger.debug(f"当前页面: {current_page_name}")
                     
                     # 如果当前页面是录制页面，直接更新UI
                     if (hasattr(self.app_manager, 'current_page') and 
                         self.app_manager.current_page and 
                         hasattr(self.app_manager.current_page, 'recording_card_area')):
                         
+                        logger.debug(f"当前页面是录制页面，准备直接添加卡片")
+                        
                         # 确保在录制页面上直接添加卡片
                         recordings_page = self.app_manager.current_page
                         if recording.rec_id not in self.app_manager.record_card_manager.cards_obj:
                             try:
+                                logger.debug(f"创建新卡片: {recording.rec_id}")
                                 card = await self.app_manager.record_card_manager.create_card(recording)
                                 recordings_page.recording_card_area.content.controls.append(card)
                                 recordings_page.recording_card_area.update()
@@ -629,16 +640,48 @@ class FastAPIServer:
                                     recordings_page.content_area.controls[1] = recordings_page.create_filter_area()
                                     recordings_page.content_area.update()
                                     
-                                logger.info(f"直接在当前页面添加了录制卡片: {recording.streamer_name}")
+                                logger.info(f"成功直接添加录制卡片到当前页面: {recording.streamer_name}")
                             except Exception as e:
                                 logger.error(f"直接添加录制卡片失败: {e}")
+                                import traceback
+                                logger.error(f"详细错误信息: {traceback.format_exc()}")
+                        else:
+                            logger.debug(f"卡片已存在: {recording.rec_id}")
                     else:
-                        logger.debug("当前页面不是录制页面，仅发送pubsub通知")
+                        logger.info(f"当前页面不是录制页面 (页面: {current_page_name})，仅发送pubsub通知")
+                        
+                    # 延迟强制刷新UI，确保所有操作完成
+                    async def delayed_ui_refresh():
+                        await asyncio.sleep(0.5)  # 等待500ms确保所有操作完成
+                        try:
+                            if (hasattr(self.app_manager, 'current_page') and 
+                                self.app_manager.current_page and 
+                                hasattr(self.app_manager.current_page, 'recording_card_area')):
+                                
+                                # 如果卡片还没有显示，强制刷新整个录制页面
+                                if recording.rec_id not in self.app_manager.record_card_manager.cards_obj:
+                                    logger.warning(f"卡片未显示，强制刷新页面: {recording.streamer_name}")
+                                    await self.app_manager.current_page.load()
+                                else:
+                                    # 只是更新页面
+                                    self.app_manager.page.update()
+                                    logger.debug("延迟页面更新完成")
+                        except Exception as e:
+                            logger.warning(f"延迟页面更新失败: {e}")
+                    
+                    # 创建延迟刷新任务
+                    asyncio.create_task(delayed_ui_refresh())
+                        
                 else:
                     logger.warning("页面或pubsub不可用，无法通知UI更新")
+                    logger.debug(f"页面存在: {hasattr(self.app_manager, 'page') and self.app_manager.page is not None}")
+                    if hasattr(self.app_manager, 'page') and self.app_manager.page:
+                        logger.debug(f"pubsub存在: {hasattr(self.app_manager.page, 'pubsub')}")
                     
             except Exception as e:
                 logger.error(f"UI更新过程失败: {str(e)}")
+                import traceback
+                logger.error(f"详细错误信息: {traceback.format_exc()}")
             
             logger.info(f"成功创建并启动录制任务: {recording.rec_id}")
             return recording.rec_id
