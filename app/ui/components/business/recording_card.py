@@ -254,7 +254,9 @@ class RecordingCardManager:
                 if self._is_page_connected():
                     try:
                         self.app.page.update()
-                        logger.debug(f"Successfully updated card for: {recording.rec_id}")
+                        # 只在录制状态变化时记录日志，避免频繁输出
+                        if recording.is_recording or recording.status_info in [RecordingStatus.RECORDING_ERROR, RecordingStatus.RECORDING]:
+                            logger.debug(f"Updated card for: {recording.rec_id} - Status: {recording.status_info}")
                     except (ft.core.page.PageDisconnectedException, AssertionError) as e:
                         logger.debug(f"Page disconnected during update: {e}")
                         return
@@ -396,7 +398,7 @@ class RecordingCardManager:
             for rec_id, card_data in self.cards_obj.items():
                 if rec_id not in keep_ids:
                     cards_to_remove.append(card_data["card"])
-                    logger.debug(f"Marking card for removal: {rec_id}")
+                    # 不记录标记移除的详细信息，减少日志噪音
 
             # Remove cards from UI
             if hasattr(recordings_page.recording_card_area, 'content') and hasattr(recordings_page.recording_card_area.content, 'controls'):
@@ -407,7 +409,9 @@ class RecordingCardManager:
                     if control not in cards_to_remove
                 ]
                 new_count = len(recordings_page.recording_card_area.content.controls)
-                logger.debug(f"Removed {original_count - new_count} cards from UI")
+                # 只在实际移除卡片时记录
+                if original_count != new_count:
+                    logger.info(f"Removed {original_count - new_count} cards from UI")
 
             # Clean up cards_obj
             original_cards_count = len(self.cards_obj)
@@ -416,7 +420,9 @@ class RecordingCardManager:
                 if k in keep_ids
             }
             new_cards_count = len(self.cards_obj)
-            logger.debug(f"Cleaned up {original_cards_count - new_cards_count} card objects")
+            # 只在实际清理对象时记录
+            if original_cards_count != new_cards_count:
+                logger.info(f"Cleaned up {original_cards_count - new_cards_count} card objects")
 
             # Stop update tasks for removed cards
             for rec_id in remove_ids:
@@ -436,7 +442,8 @@ class RecordingCardManager:
                         asyncio.to_thread(recordings_page.recording_card_area.update),
                         timeout=3.0
                     )
-                    logger.debug("Successfully updated recording card area")
+                    # 不记录成功的卡片区域更新，减少日志噪音
+                    pass
                 except asyncio.TimeoutError:
                     logger.warning("Recording card area update timed out (page may be frozen)")
                 except (ft.core.page.PageDisconnectedException, AssertionError) as e:
@@ -525,7 +532,8 @@ class RecordingCardManager:
             if self._is_page_connected():
                 try:
                     self.cards_obj[recording.rec_id]["card"].update()
-                    logger.debug(f"Successfully updated card click state for: {recording.rec_id}")
+                    # 不记录成功的点击状态更新，减少日志噪音
+                    pass
                 except (ft.core.page.PageDisconnectedException, AssertionError) as e:
                     logger.debug(f"Page disconnected during card click update: {e}")
             else:

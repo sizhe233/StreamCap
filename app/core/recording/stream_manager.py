@@ -69,7 +69,7 @@ class LiveStreamRecorder:
                 with GlobalRecordingState.lock:
                     if self.recording in GlobalRecordingState.recordings:
                         GlobalRecordingState.recordings.remove(self.recording)
-                        logger.debug(f"Successfully removed recording from backend: {record_name}")
+                        logger.info(f"Removed recording from backend: {record_name}")
                     else:
                         logger.debug(f"Recording already removed from backend: {record_name}")
                 
@@ -110,7 +110,7 @@ class LiveStreamRecorder:
                 self.app.record_card_manager.remove_recording_card([self.recording]),
                 timeout=2.0
             )
-            logger.debug(f"Successfully removed UI card: {record_name}")
+            logger.info(f"Removed UI card: {record_name}")
         except asyncio.TimeoutError:
             logger.warning(f"UI card removal timed out for: {record_name}")
         except Exception as e:
@@ -119,7 +119,8 @@ class LiveStreamRecorder:
         # Step 3: Send pubsub notification
         try:
             self.app.page.pubsub.send_others_on_topic("delete", [self.recording])
-            logger.debug(f"Successfully sent pubsub notification: {record_name}")
+            # 不记录成功的pubsub通知，减少日志噪音
+            pass
         except Exception as e:
             logger.warning(f"Failed to send pubsub notification: {e}")
         
@@ -129,7 +130,8 @@ class LiveStreamRecorder:
                 self.app.snack_bar.show_snack_bar(f"{record_name} {error_message}", duration),
                 timeout=1.0
             )
-            logger.debug(f"Successfully showed notification: {record_name}")
+            # 不记录成功的通知显示，减少日志噪音
+            pass
         except asyncio.TimeoutError:
             logger.warning(f"Notification display timed out for: {record_name}")
         except Exception as e:
