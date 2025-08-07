@@ -193,61 +193,90 @@ class RecordingCardManager:
 
     async def update_card(self, recording):
         """Update only the recordings cards in the scrollable content area."""
-        if recording.rec_id in self.cards_obj:
-            try:
-                recording_card = self.cards_obj[recording.rec_id]
+        # Early check for page connection
+        if not self._is_page_connected():
+            logger.debug(f"Page disconnected, skipping card update for: {recording.rec_id}")
+            return
+            
+        if recording.rec_id not in self.cards_obj:
+            logger.debug(f"Card not found for recording: {recording.rec_id}")
+            return
+            
+        try:
+            recording_card = self.cards_obj[recording.rec_id]
 
-                display_title = RecordingCardState.get_display_title(recording, self._)
-                if recording_card.get("display_title_label"):
-                    recording_card["display_title_label"].value = display_title
-                    recording_card["display_title_label"].weight = RecordingCardState.get_title_weight(recording)
+            # Update display title
+            display_title = RecordingCardState.get_display_title(recording, self._)
+            if recording_card.get("display_title_label"):
+                recording_card["display_title_label"].value = display_title
+                recording_card["display_title_label"].weight = RecordingCardState.get_title_weight(recording)
 
-                new_status_label = self.create_status_label(recording)
+            # Update status label
+            new_status_label = self.create_status_label(recording)
+            if recording_card["card"] and recording_card["card"].content and recording_card["card"].content.content:
+                title_row = recording_card["card"].content.content.controls[0]
+                title_row.alignment = ft.MainAxisAlignment.START
+                title_row.spacing = 5
+                title_row.tight = True
 
-                if recording_card["card"] and recording_card["card"].content and recording_card["card"].content.content:
-                    title_row = recording_card["card"].content.content.controls[0]
-                    title_row.alignment = ft.MainAxisAlignment.START
-                    title_row.spacing = 5
-                    title_row.tight = True
-
-                    # Update the status label if it exists
-                    if new_status_label:
-                        if len(title_row.controls) > 1:
-                            title_row.controls[1] = new_status_label
-                        else:
-                            title_row.controls.append(new_status_label)
+                # Update the status label if it exists
+                if new_status_label:
+                    if len(title_row.controls) > 1:
+                        title_row.controls[1] = new_status_label
                     else:
-                        if len(title_row.controls) > 1:
-                            title_row.controls.pop()
+                        title_row.controls.append(new_status_label)
+                else:
+                    if len(title_row.controls) > 1:
+                        title_row.controls.pop()
 
-                if recording_card.get("duration_label"):
-                    recording_card["duration_label"].value = self.app.record_manager.get_duration(recording)
+            # Update duration and speed
+            if recording_card.get("duration_label"):
+                recording_card["duration_label"].value = self.app.record_manager.get_duration(recording)
 
-                if recording_card.get("speed_label"):
-                    recording_card["speed_label"].value = recording.speed
+            if recording_card.get("speed_label"):
+                recording_card["speed_label"].value = recording.speed
 
-                if recording_card.get("record_button"):
-                    recording_card["record_button"].icon = self.get_icon_for_recording_state(recording)
-                    recording_card["record_button"].tooltip = self.get_tip_for_recording_state(recording)
+            # Update buttons
+            if recording_card.get("record_button"):
+                recording_card["record_button"].icon = self.get_icon_for_recording_state(recording)
+                recording_card["record_button"].tooltip = self.get_tip_for_recording_state(recording)
 
-                if recording_card.get("monitor_button"):
-                    recording_card["monitor_button"].icon = self.get_icon_for_monitor_state(recording)
-                    recording_card["monitor_button"].tooltip = self.get_tip_for_monitor_state(recording)
+            if recording_card.get("monitor_button"):
+                recording_card["monitor_button"].icon = self.get_icon_for_monitor_state(recording)
+                recording_card["monitor_button"].tooltip = self.get_tip_for_monitor_state(recording)
 
-                if recording_card["card"] and recording_card["card"].content:
-                    recording_card["card"].content.bgcolor = self.get_card_background_color(recording)
-                    recording_card["card"].content.border = ft.border.all(2, self.get_card_border_color(recording))
+            # Update card appearance
+            if recording_card["card"] and recording_card["card"].content:
+                recording_card["card"].content.bgcolor = self.get_card_background_color(recording)
+                recording_card["card"].content.border = ft.border.all(2, self.get_card_border_color(recording))
+                
+                # Final page update with connection check
+                if self._is_page_connected():
                     try:
                         self.app.page.update()
+                        logger.debug(f"Successfully updated card for: {recording.rec_id}")
                     except (ft.core.page.PageDisconnectedException, AssertionError) as e:
-                        logger.debug(f"Update card failed: {e}")
+                        logger.debug(f"Page disconnected during update: {e}")
                         return
+                else:
+                    logger.debug(f"Page disconnected before final update for: {recording.rec_id}")
+                    return
 
-            except (ft.core.page.PageDisconnectedException, AssertionError) as e:
-                logger.debug(f"Update card failed: {e}")
-                return
-            except Exception as e:
-                logger.debug(f"Update card failed: {e}")
+        except (ft.core.page.PageDisconnectedException, AssertionError) as e:
+            logger.debug(f"Page disconnected during card update: {e}")
+            return
+        except Exception as e:
+            logger.error(f"Unexpected error updating card for {recording.rec_id}: {e}")
+
+    def _is_page_connected(self) -> bool:
+        """Check if the page is still connected"""
+        try:
+            return (hasattr(self.app, 'page') and 
+                    self.app.page is not None and 
+                    hasattr(self.app.page, 'update') and
+                    not getattr(self.app.page, '_disconnected', False))
+        except Exception:
+            return False
 
     async def update_monitor_state(self, recording: Recording):
         """Update the monitor button state based on the current monitoring status."""
@@ -387,11 +416,14 @@ class RecordingCardManager:
                         logger.debug(f"Failed to cancel update task for {rec_id}: {e}")
 
             # Update UI
-            try:
-                recordings_page.recording_card_area.update()
-                logger.debug("Successfully updated recording card area")
-            except (ft.core.page.PageDisconnectedException, AssertionError) as e:
-                logger.debug(f"Update recording card area failed: {e}")
+            if self._is_page_connected():
+                try:
+                    recordings_page.recording_card_area.update()
+                    logger.debug("Successfully updated recording card area")
+                except (ft.core.page.PageDisconnectedException, AssertionError) as e:
+                    logger.debug(f"Page disconnected during card area update: {e}")
+            else:
+                logger.debug("Page disconnected, skipping card area update")
 
         except (ft.core.page.PageDisconnectedException, AssertionError) as e:
             logger.debug(f"Remove recording card failed: {e}")
@@ -424,19 +456,35 @@ class RecordingCardManager:
         while True:
             update_interval = 1
             await asyncio.sleep(update_interval)
-            if not recording or recording.rec_id not in self.cards_obj:  # Stop task if card is removed
+            
+            # Check if we should stop the task
+            if not recording or recording.rec_id not in self.cards_obj:
+                logger.debug(f"Stopping duration update task for removed recording: {recording.rec_id if recording else 'None'}")
+                break
+                
+            # Check page connection
+            if not self._is_page_connected():
+                logger.debug(f"Page disconnected, stopping duration update for: {recording.rec_id}")
                 break
 
             if recording.is_recording:
                 try:
                     duration_label = self.cards_obj[recording.rec_id]["duration_label"]
                     duration_label.value = self.app.record_manager.get_duration(recording)
-                    duration_label.update()
+                    
+                    # Only update if page is still connected
+                    if self._is_page_connected():
+                        duration_label.update()
+                    else:
+                        logger.debug(f"Page disconnected during duration update for: {recording.rec_id}")
+                        break
+                        
                 except (ft.core.page.PageDisconnectedException, AssertionError) as e:
-                    logger.debug(f"Update duration failed: {e}")
+                    logger.debug(f"Page disconnected during duration update: {e}")
                     break
                 except Exception as e:
-                    logger.debug(f"Update duration failed: {e}")
+                    logger.debug(f"Unexpected error updating duration for {recording.rec_id}: {e}")
+                    # Don't break on unexpected errors, just log and continue
 
     def start_update_task(self, recording: Recording):
         """Start a background task to update the duration text."""
@@ -444,18 +492,28 @@ class RecordingCardManager:
 
     async def on_card_click(self, recording: Recording):
         """Handle card click events."""
+        if not self._is_page_connected():
+            logger.debug(f"Page disconnected, skipping card click for: {recording.rec_id}")
+            return
+            
         try:
             recording.selected = not recording.selected
             self.selected_cards[recording.rec_id] = recording
             self.cards_obj[recording.rec_id]["card"].content.bgcolor = await self.update_record_hover(recording)
-            try:
-                self.cards_obj[recording.rec_id]["card"].update()
-            except (ft.core.page.PageDisconnectedException, AssertionError) as e:
-                logger.debug(f"Update card click state failed: {e}")
+            
+            if self._is_page_connected():
+                try:
+                    self.cards_obj[recording.rec_id]["card"].update()
+                    logger.debug(f"Successfully updated card click state for: {recording.rec_id}")
+                except (ft.core.page.PageDisconnectedException, AssertionError) as e:
+                    logger.debug(f"Page disconnected during card click update: {e}")
+            else:
+                logger.debug(f"Page disconnected before card click update for: {recording.rec_id}")
+                
         except (ft.core.page.PageDisconnectedException, AssertionError) as e:
-            logger.debug(f"Handle card click event failed: {e}")
+            logger.debug(f"Page disconnected during card click handling: {e}")
         except Exception as e:
-            logger.debug(f"Handle card click event failed: {e}")
+            logger.error(f"Unexpected error handling card click for {recording.rec_id}: {e}")
 
     async def recording_dir_on_click(self, recording: Recording):
         if recording.recording_dir:

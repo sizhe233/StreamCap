@@ -60,6 +60,11 @@ class LiveStreamRecorder:
         """
         Safely remove a failed recording with comprehensive error handling
         """
+        # Check if page is still connected before starting removal process
+        if not self._is_page_connected():
+            logger.debug(f"Page disconnected, skipping removal process for: {record_name}")
+            return False
+            
         removal_success = False
         try:
             # Step 1: Remove from backend task list
@@ -70,29 +75,40 @@ class LiveStreamRecorder:
                 logger.warning(f"Failed to remove recording from backend: {e}")
                 # Continue with other steps even if this fails
             
-            # Step 2: Remove UI card
-            try:
-                await self.app.record_card_manager.remove_recording_card([self.recording])
-                logger.debug(f"Successfully removed UI card: {record_name}")
-            except Exception as e:
-                logger.warning(f"Failed to remove UI card: {e}")
-                # Continue with other steps even if this fails
+            # Step 2: Remove UI card (only if page is still connected)
+            if self._is_page_connected():
+                try:
+                    await self.app.record_card_manager.remove_recording_card([self.recording])
+                    logger.debug(f"Successfully removed UI card: {record_name}")
+                except Exception as e:
+                    logger.warning(f"Failed to remove UI card: {e}")
+                    # Continue with other steps even if this fails
+            else:
+                logger.debug(f"Page disconnected, skipping UI card removal for: {record_name}")
             
-            # Step 3: Send pubsub notification
-            try:
-                self.app.page.pubsub.send_others_on_topic("delete", [self.recording])
-                logger.debug(f"Successfully sent pubsub notification: {record_name}")
-            except Exception as e:
-                logger.warning(f"Failed to send pubsub notification: {e}")
-                # Continue with other steps even if this fails
+            # Step 3: Send pubsub notification (only if page is still connected)
+            if self._is_page_connected():
+                try:
+                    self.app.page.pubsub.send_others_on_topic("delete", [self.recording])
+                    logger.debug(f"Successfully sent pubsub notification: {record_name}")
+                except Exception as e:
+                    logger.warning(f"Failed to send pubsub notification: {e}")
+                    # Continue with other steps even if this fails
+            else:
+                logger.debug(f"Page disconnected, skipping pubsub notification for: {record_name}")
             
-            # Step 4: Show notification
-            try:
-                await self.app.snack_bar.show_snack_bar(f"{record_name} {error_message}", duration)
-                logger.debug(f"Successfully showed notification: {record_name}")
+            # Step 4: Show notification (only if page is still connected)
+            if self._is_page_connected():
+                try:
+                    await self.app.snack_bar.show_snack_bar(f"{record_name} {error_message}", duration)
+                    logger.debug(f"Successfully showed notification: {record_name}")
+                    removal_success = True
+                except Exception as e:
+                    logger.warning(f"Failed to show notification: {e}")
+            else:
+                logger.debug(f"Page disconnected, skipping notification for: {record_name}")
+                # Consider backend removal as success even if UI operations are skipped
                 removal_success = True
-            except Exception as e:
-                logger.warning(f"Failed to show notification: {e}")
                 
         except Exception as e:
             logger.error(f"Unexpected error during removal process: {e}")
@@ -103,6 +119,16 @@ class LiveStreamRecorder:
             logger.warning(f"Removal process completed with some failures for: {record_name}")
         
         return removal_success
+
+    def _is_page_connected(self) -> bool:
+        """Check if the page is still connected"""
+        try:
+            return (hasattr(self.app, 'page') and 
+                    self.app.page is not None and 
+                    hasattr(self.app.page, 'update') and
+                    not getattr(self.app.page, '_disconnected', False))
+        except Exception:
+            return False
 
     def _get_info(self, key: str, default: T = None) -> T:
         return self.recording_info.get(key, default) or default
