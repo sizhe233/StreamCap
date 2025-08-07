@@ -226,13 +226,16 @@ class LiveStreamRecorder:
         if self.user_config.get("folder_name_platform"):
             output_dir = os.path.join(output_dir, stream_info.platform)
         if self.user_config.get("folder_name_author"):
-            output_dir = os.path.join(output_dir, stream_info.anchor_name)
+            # 清理主播名字，避免Windows文件系统不支持的字符
+            clean_anchor_name = utils.clean_name(stream_info.anchor_name, "Unknown")
+            output_dir = os.path.join(output_dir, clean_anchor_name)
         if self.user_config.get("folder_name_time"):
             output_dir = os.path.join(output_dir, now[:10])
         if self.user_config.get("folder_name_title") and stream_info.title:
             live_title = self._clean_and_truncate_title(stream_info.title)
             if self.user_config.get("folder_name_time"):
-                output_dir = os.path.join(output_dir, f"{live_title}_{stream_info.anchor_name}")
+                clean_anchor_name = utils.clean_name(stream_info.anchor_name, "Unknown")
+                output_dir = os.path.join(output_dir, f"{live_title}_{clean_anchor_name}")
             else:
                 output_dir = os.path.join(output_dir, f"{now[:10]}_{live_title}")
         os.makedirs(output_dir, exist_ok=True)

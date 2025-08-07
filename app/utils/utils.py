@@ -207,7 +207,17 @@ def clean_name(input_text, default=None):
         rstr = r"[\/\\\:\*\？?\"\<\>\|&#.。,， ~！· ]"
         cleaned_name = input_text.strip().replace("（", "(").replace("）", ")")
         cleaned_name = re.sub(rstr, "_", cleaned_name)
-        cleaned_name = remove_emojis(cleaned_name, "_").replace("__", "_").strip("_")
+        cleaned_name = remove_emojis(cleaned_name, "_")
+        
+        # 处理连续的下划线
+        cleaned_name = cleaned_name.replace("__", "_")
+        
+        # 移除连续的点号，这在Windows中会导致文件夹创建失败
+        while ".." in cleaned_name:
+            cleaned_name = cleaned_name.replace("..", ".")
+        
+        # 移除开头和结尾的下划线和点号
+        cleaned_name = cleaned_name.strip("_.")
         return cleaned_name or default
     return default
 

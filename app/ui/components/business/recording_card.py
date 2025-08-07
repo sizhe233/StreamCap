@@ -255,8 +255,8 @@ class RecordingCardManager:
                     try:
                         self.app.page.update()
                         # 只在录制状态变化时记录日志，避免频繁输出
-                        if recording.is_recording or recording.status_info in [RecordingStatus.RECORDING_ERROR, RecordingStatus.RECORDING]:
-                            logger.debug(f"Updated card for: {recording.rec_id} - Status: {recording.status_info}")
+                        # if recording.is_recording or recording.status_info in [RecordingStatus.RECORDING_ERROR, RecordingStatus.RECORDING]:
+                            # logger.debug(f"Updated card for: {recording.rec_id} - Status: {recording.status_info}")
                     except (ft.core.page.PageDisconnectedException, AssertionError) as e:
                         logger.debug(f"Page disconnected during update: {e}")
                         return
