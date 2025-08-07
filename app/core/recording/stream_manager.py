@@ -82,16 +82,60 @@ class LiveStreamRecorder:
             except Exception as e:
                 logger.warning(f"Failed to remove recording from backend: {e}")
             
-            # Step 2-4: Try UI operations but don't block on them
+            # Step 2-4: Try UI operations with immediate execution
             try:
                 if self._is_page_connected():
-                    # Fire-and-forget UI operations
-                    asyncio.create_task(self._remove_ui_components_async(record_name, error_message, duration))
-                    logger.debug(f"Scheduled UI removal for: {record_name}")
+                    # 立即执行UI移除操作，不使用异步任务
+                    try:
+                        # 直接调用移除UI卡片
+                        self.app.page.run_task(self.app.record_card_manager.remove_recording_card, [self.recording])
+                        logger.debug(f"Scheduled UI card removal for: {record_name}")
+                    except Exception as e:
+                        logger.warning(f"Failed to schedule UI card removal: {e}")
+                    
+                    # 发送pubsub通知
+                    try:
+                        self.app.page.pubsub.send_others_on_topic("delete", [self.recording])
+                        logger.debug(f"Sent pubsub delete notification for: {record_name}")
+                    except Exception as e:
+                        logger.warning(f"Failed to send pubsub notification: {e}")
+                    
+                    # 显示通知
+                    try:
+                        self.app.page.run_task(self.app.snack_bar.show_snack_bar, f"{record_name} {error_message}", duration)
+                        logger.debug(f"Scheduled notification for: {record_name}")
+                    except Exception as e:
+                        logger.warning(f"Failed to schedule notification: {e}")
+                        
+                    # 强制刷新页面，确保UI更新
+                    try:
+                        if (hasattr(self.app, 'current_page') and 
+                            self.app.current_page and 
+                            hasattr(self.app.current_page, 'recording_card_area')):
+                            
+                            # 延迟检查并强制刷新
+                            def delayed_check():
+                                try:
+                                    # 检查卡片是否还在UI中
+                                    if self.recording.rec_id in self.app.record_card_manager.cards_obj:
+                                        logger.warning(f"Card still exists after removal, forcing page refresh: {record_name}")
+                                        self.app.page.run_task(self.app.current_page.load)
+                                except Exception as e:
+                                    logger.debug(f"Delayed check failed: {e}")
+                            
+                            # 1秒后检查
+                            import threading
+                            timer = threading.Timer(1.0, delayed_check)
+                            timer.start()
+                            
+                    except Exception as e:
+                        logger.debug(f"Failed to setup delayed refresh: {e}")
+                        
+                    logger.debug(f"Completed UI operations for: {record_name}")
                 else:
                     logger.debug(f"Page disconnected, skipping UI operations for: {record_name}")
             except Exception as ui_error:
-                logger.warning(f"Failed to schedule UI removal for {record_name}: {ui_error}")
+                logger.warning(f"Failed to execute UI operations for {record_name}: {ui_error}")
             
             logger.info(f"Successfully completed removal process for: {record_name}")
             return True
