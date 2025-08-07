@@ -676,26 +676,48 @@ class RecordingsPage(PageBase):
 
     async def subscribe_add_cards(self, _, recording: Recording):
         """Handle the subscription of adding cards from other clients"""
-        
-        self.loading_indicator.visible = True
-        self.loading_indicator.update()
-        
-        if recording.rec_id not in self.app.record_card_manager.cards_obj:
-            card = await self.app.record_card_manager.create_card(recording)
-            recording.scheduled_time_range = await self.app.record_manager.get_scheduled_time_range(
-                recording.scheduled_start_time, recording.monitor_hours
-            )
+        try:
+            logger.info(f"Received add card request for: {recording.streamer_name} (ID: {recording.rec_id})")
             
-            self.recording_card_area.content.controls.append(card)
-            self.app.record_card_manager.cards_obj[recording.rec_id]["card"] = card
-            
-            self.loading_indicator.visible = False
+            self.loading_indicator.visible = True
             self.loading_indicator.update()
             
-            self.recording_card_area.update()
-            
-            self.content_area.controls[1] = self.create_filter_area()
-            self.content_area.update()
+            if recording.rec_id not in self.app.record_card_manager.cards_obj:
+                # create_card方法会自动添加到cards_obj中
+                card = await self.app.record_card_manager.create_card(recording)
+                
+                # 设置计划时间范围
+                recording.scheduled_time_range = await self.app.record_manager.get_scheduled_time_range(
+                    recording.scheduled_start_time, recording.monitor_hours
+                )
+                
+                # 添加卡片到UI
+                self.recording_card_area.content.controls.append(card)
+                logger.debug(f"Added card to UI for: {recording.streamer_name}")
+                
+                # 更新UI
+                self.loading_indicator.visible = False
+                self.loading_indicator.update()
+                
+                self.recording_card_area.update()
+                
+                # 更新过滤区域
+                self.content_area.controls[1] = self.create_filter_area()
+                self.content_area.update()
+                
+                logger.info(f"Successfully added card for: {recording.streamer_name}")
+            else:
+                logger.debug(f"Card already exists for: {recording.streamer_name}")
+                self.loading_indicator.visible = False
+                self.loading_indicator.update()
+                
+        except Exception as e:
+            logger.error(f"Failed to add card for {recording.streamer_name}: {e}")
+            self.loading_indicator.visible = False
+            try:
+                self.loading_indicator.update()
+            except:
+                pass
 
     async def update_grid_layout(self, _):
         self.page.run_task(self.recalculate_grid_columns)

@@ -598,30 +598,47 @@ class FastAPIServer:
             # 开始监控录制
             await record_manager.start_monitor_recording(recording)
             
-            # 更新UI - 创建录制卡片并通过pubsub通知UI更新
-            if hasattr(self.app_manager, 'page') and hasattr(self.app_manager.page, 'pubsub'):
-                # 创建录制卡片
-                if hasattr(self.app_manager, 'record_card_manager'):
-                    try:
-                        # 创建卡片
-                        card = await self.app_manager.record_card_manager.create_card(recording)
-                        
-                        # 设置计划时间范围
-                        recording.scheduled_time_range = await self.app_manager.record_manager.get_scheduled_time_range(
-                            recording.scheduled_start_time, recording.monitor_hours
-                        )
-                        
-                        # 通过pubsub通知UI更新，这会触发subscribe_add_cards方法
-                        self.app_manager.page.pubsub.send_others_on_topic("add", recording)
-                        logger.info(f"已创建录制卡片并通过pubsub通知UI更新: {recording.streamer_name}")
-                    except Exception as e:
-                        logger.error(f"创建录制卡片失败: {str(e)}")
-                        # 即使卡片创建失败，也要发送pubsub消息
-                        self.app_manager.page.pubsub.send_others_on_topic("add", recording)
-                else:
-                    # 如果没有record_card_manager，只发送pubsub消息
+            # 更新UI - 通过pubsub通知UI更新，让UI自己创建卡片
+            try:
+                # 设置计划时间范围
+                recording.scheduled_time_range = await self.app_manager.record_manager.get_scheduled_time_range(
+                    recording.scheduled_start_time, recording.monitor_hours
+                )
+                
+                # 检查页面和pubsub是否可用
+                if hasattr(self.app_manager, 'page') and self.app_manager.page and hasattr(self.app_manager.page, 'pubsub'):
+                    # 通过pubsub通知UI更新，这会触发subscribe_add_cards方法
                     self.app_manager.page.pubsub.send_others_on_topic("add", recording)
-                    logger.info(f"已通过pubsub通知UI更新录制任务: {recording.streamer_name}")
+                    logger.info(f"已通过pubsub通知UI更新: {recording.streamer_name}")
+                    
+                    # 如果当前页面是录制页面，直接更新UI
+                    if (hasattr(self.app_manager, 'current_page') and 
+                        self.app_manager.current_page and 
+                        hasattr(self.app_manager.current_page, 'recording_card_area')):
+                        
+                        # 确保在录制页面上直接添加卡片
+                        recordings_page = self.app_manager.current_page
+                        if recording.rec_id not in self.app_manager.record_card_manager.cards_obj:
+                            try:
+                                card = await self.app_manager.record_card_manager.create_card(recording)
+                                recordings_page.recording_card_area.content.controls.append(card)
+                                recordings_page.recording_card_area.update()
+                                
+                                # 更新过滤区域
+                                if hasattr(recordings_page, 'content_area') and len(recordings_page.content_area.controls) > 1:
+                                    recordings_page.content_area.controls[1] = recordings_page.create_filter_area()
+                                    recordings_page.content_area.update()
+                                    
+                                logger.info(f"直接在当前页面添加了录制卡片: {recording.streamer_name}")
+                            except Exception as e:
+                                logger.error(f"直接添加录制卡片失败: {e}")
+                    else:
+                        logger.debug("当前页面不是录制页面，仅发送pubsub通知")
+                else:
+                    logger.warning("页面或pubsub不可用，无法通知UI更新")
+                    
+            except Exception as e:
+                logger.error(f"UI更新过程失败: {str(e)}")
             
             logger.info(f"成功创建并启动录制任务: {recording.rec_id}")
             return recording.rec_id
