@@ -56,101 +56,90 @@ class LiveStreamRecorder:
         for key in ("recording_manager", "stream_manager"):
             self._.update(language.get(key, {}))
 
-    async def safe_remove_recording(self, record_name: str, error_message: str = "录制失败已从任务列表中移除", duration: int = 3000):
+    def safe_remove_recording_sync(self, record_name: str, error_message: str = "录制失败已从任务列表中移除", duration: int = 3000):
         """
-        Safely remove a failed recording with comprehensive error handling and timeout protection
+        Synchronous version of recording removal to avoid async deadlocks
         """
-        logger.info(f"Starting removal process for: {record_name}")
+        logger.info(f"Starting synchronous removal process for: {record_name}")
         
-        # Check if page is still connected before starting removal process
-        if not self._is_page_connected():
-            logger.debug(f"Page disconnected, skipping removal process for: {record_name}")
-            return False
-            
-        removal_success = False
         try:
-            # Step 1: Remove from backend task list (always do this, it's critical)
+            # Step 1: Remove from backend task list (critical operation)
             try:
-                await asyncio.wait_for(
-                    self.app.record_manager.remove_recording(self.recording), 
-                    timeout=5.0
-                )
-                logger.debug(f"Successfully removed recording from backend: {record_name}")
-            except asyncio.TimeoutError:
-                logger.warning(f"Backend removal timed out for: {record_name}")
-                # Continue with other steps even if this times out
+                from ...core.recording.record_manager import GlobalRecordingState
+                with GlobalRecordingState.lock:
+                    if self.recording in GlobalRecordingState.recordings:
+                        GlobalRecordingState.recordings.remove(self.recording)
+                        logger.debug(f"Successfully removed recording from backend: {record_name}")
+                    else:
+                        logger.debug(f"Recording already removed from backend: {record_name}")
+                
+                # Try to persist config, but don't block if it fails
+                try:
+                    asyncio.create_task(self.app.record_manager.persist_recordings())
+                except Exception as persist_error:
+                    logger.warning(f"Failed to schedule config persistence: {persist_error}")
+                    
             except Exception as e:
                 logger.warning(f"Failed to remove recording from backend: {e}")
-                # Continue with other steps even if this fails
             
-            # Step 2: Remove UI card (with timeout protection)
-            if self._is_page_connected():
-                try:
-                    await asyncio.wait_for(
-                        self.app.record_card_manager.remove_recording_card([self.recording]),
-                        timeout=3.0
-                    )
-                    logger.debug(f"Successfully removed UI card: {record_name}")
-                except asyncio.TimeoutError:
-                    logger.warning(f"UI card removal timed out for: {record_name} (page may be frozen)")
-                    # Continue with other steps
-                except Exception as e:
-                    logger.warning(f"Failed to remove UI card: {e}")
-                    # Continue with other steps even if this fails
-            else:
-                logger.debug(f"Page disconnected, skipping UI card removal for: {record_name}")
+            # Step 2-4: Try UI operations but don't block on them
+            try:
+                if self._is_page_connected():
+                    # Fire-and-forget UI operations
+                    asyncio.create_task(self._remove_ui_components_async(record_name, error_message, duration))
+                    logger.debug(f"Scheduled UI removal for: {record_name}")
+                else:
+                    logger.debug(f"Page disconnected, skipping UI operations for: {record_name}")
+            except Exception as ui_error:
+                logger.warning(f"Failed to schedule UI removal for {record_name}: {ui_error}")
             
-            # Step 3: Send pubsub notification (with timeout protection)
-            if self._is_page_connected():
-                try:
-                    # Use asyncio.create_task to avoid blocking
-                    task = asyncio.create_task(
-                        asyncio.to_thread(
-                            self.app.page.pubsub.send_others_on_topic, "delete", [self.recording]
-                        )
-                    )
-                    await asyncio.wait_for(task, timeout=2.0)
-                    logger.debug(f"Successfully sent pubsub notification: {record_name}")
-                except asyncio.TimeoutError:
-                    logger.warning(f"Pubsub notification timed out for: {record_name}")
-                    # Continue with other steps
-                except Exception as e:
-                    logger.warning(f"Failed to send pubsub notification: {e}")
-                    # Continue with other steps even if this fails
-            else:
-                logger.debug(f"Page disconnected, skipping pubsub notification for: {record_name}")
-            
-            # Step 4: Show notification (with timeout protection)
-            if self._is_page_connected():
-                try:
-                    await asyncio.wait_for(
-                        self.app.snack_bar.show_snack_bar(f"{record_name} {error_message}", duration),
-                        timeout=2.0
-                    )
-                    logger.debug(f"Successfully showed notification: {record_name}")
-                    removal_success = True
-                except asyncio.TimeoutError:
-                    logger.warning(f"Notification display timed out for: {record_name} (page may be frozen)")
-                    # Still consider it successful if backend removal worked
-                    removal_success = True
-                except Exception as e:
-                    logger.warning(f"Failed to show notification: {e}")
-                    # Still consider it successful if backend removal worked
-                    removal_success = True
-            else:
-                logger.debug(f"Page disconnected, skipping notification for: {record_name}")
-                # Consider backend removal as success even if UI operations are skipped
-                removal_success = True
+            logger.info(f"Successfully completed removal process for: {record_name}")
+            return True
                 
         except Exception as e:
-            logger.error(f"Unexpected error during removal process: {e}")
+            logger.error(f"Critical error during removal process for {record_name}: {e}")
+            return False
+
+    async def _remove_ui_components_async(self, record_name: str, error_message: str, duration: int):
+        """
+        Handle UI removal operations asynchronously with individual timeouts
+        """
+        # Step 2: Remove UI card
+        try:
+            await asyncio.wait_for(
+                self.app.record_card_manager.remove_recording_card([self.recording]),
+                timeout=2.0
+            )
+            logger.debug(f"Successfully removed UI card: {record_name}")
+        except asyncio.TimeoutError:
+            logger.warning(f"UI card removal timed out for: {record_name}")
+        except Exception as e:
+            logger.warning(f"Failed to remove UI card: {e}")
         
-        if removal_success:
-            logger.info(f"Successfully completed removal process for: {record_name}")
-        else:
-            logger.warning(f"Removal process completed with some failures for: {record_name}")
+        # Step 3: Send pubsub notification
+        try:
+            self.app.page.pubsub.send_others_on_topic("delete", [self.recording])
+            logger.debug(f"Successfully sent pubsub notification: {record_name}")
+        except Exception as e:
+            logger.warning(f"Failed to send pubsub notification: {e}")
         
-        return removal_success
+        # Step 4: Show notification
+        try:
+            await asyncio.wait_for(
+                self.app.snack_bar.show_snack_bar(f"{record_name} {error_message}", duration),
+                timeout=1.0
+            )
+            logger.debug(f"Successfully showed notification: {record_name}")
+        except asyncio.TimeoutError:
+            logger.warning(f"Notification display timed out for: {record_name}")
+        except Exception as e:
+            logger.warning(f"Failed to show notification: {e}")
+
+    async def safe_remove_recording(self, record_name: str, error_message: str = "录制失败已从任务列表中移除", duration: int = 3000):
+        """
+        Safely remove a failed recording - now uses sync approach to avoid deadlocks
+        """
+        return self.safe_remove_recording_sync(record_name, error_message, duration)
 
     def _is_page_connected(self) -> bool:
         """Check if the page is still connected and responsive"""
@@ -496,8 +485,11 @@ class LiveStreamRecorder:
                         # For critical errors like 404, remove from task list but keep downloaded files
                         logger.info(f"Removing failed recording from task list due to critical error: {record_name}")
                         
-                        # Execute removal in background to prevent UI freeze
-                        asyncio.create_task(self.safe_remove_recording(record_name))
+                        # Execute removal immediately without blocking
+                        try:
+                            self.safe_remove_recording_sync(record_name)
+                        except Exception as e:
+                            logger.error(f"Failed to remove recording {record_name}: {e}")
                     else:
                         # For other errors, just update the status
                         self.app.page.run_task(self.app.record_card_manager.update_card, self.recording)
@@ -595,8 +587,11 @@ class LiveStreamRecorder:
                     # For critical errors, remove from task list but keep downloaded files
                     logger.info(f"Removing failed recording from task list due to critical error: {record_name}")
                     
-                    # Execute removal in background to prevent UI freeze
-                    asyncio.create_task(self.safe_remove_recording(record_name, "录制失败已从任务列表中移除", 4000))
+                    # Execute removal immediately without blocking
+                    try:
+                        self.safe_remove_recording_sync(record_name, "录制失败已从任务列表中移除", 4000)
+                    except Exception as e:
+                        logger.error(f"Failed to remove recording {record_name}: {e}")
                 else:
                     # For other errors, just update the status
                     self.app.page.run_task(self.app.record_card_manager.update_card, self.recording)
@@ -900,8 +895,11 @@ class LiveStreamRecorder:
                     # Remove the recording from the backend task list
                     logger.info(f"Removing failed recording from task list: {record_name}")
                     
-                    # Execute removal in background to prevent UI freeze
-                    asyncio.create_task(self.safe_remove_recording(record_name, "录制失败已从任务列表中移除 (404错误)"))
+                    # Execute removal immediately without blocking
+                    try:
+                        self.safe_remove_recording_sync(record_name, "录制失败已从任务列表中移除 (404错误)")
+                    except Exception as e:
+                        logger.error(f"Failed to remove recording {record_name}: {e}")
                     
                 except Exception as e:
                     logger.debug(f"Failed to remove failed recording from task list: {e}")
@@ -978,8 +976,11 @@ class LiveStreamRecorder:
                     # For critical errors, remove from task list but keep downloaded files
                     logger.info(f"Removing failed recording from task list due to critical error: {record_name}")
                     
-                    # Execute removal in background to prevent UI freeze
-                    asyncio.create_task(self.safe_remove_recording(record_name))
+                    # Execute removal immediately without blocking
+                    try:
+                        self.safe_remove_recording_sync(record_name)
+                    except Exception as e:
+                        logger.error(f"Failed to remove recording {record_name}: {e}")
                 else:
                     # For other errors, just update the status
                     self.app.page.run_task(self.app.record_card_manager.update_card, self.recording)
