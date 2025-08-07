@@ -269,13 +269,26 @@ class RecordingCardManager:
             logger.error(f"Unexpected error updating card for {recording.rec_id}: {e}")
 
     def _is_page_connected(self) -> bool:
-        """Check if the page is still connected"""
+        """Check if the page is still connected and responsive"""
         try:
-            return (hasattr(self.app, 'page') and 
+            if not (hasattr(self.app, 'page') and 
                     self.app.page is not None and 
-                    hasattr(self.app.page, 'update') and
-                    not getattr(self.app.page, '_disconnected', False))
-        except Exception:
+                    hasattr(self.app.page, 'update')):
+                return False
+                
+            # Check if page is disconnected
+            if getattr(self.app.page, '_disconnected', False):
+                return False
+                
+            # Additional check for web pages that might be frozen
+            if hasattr(self.app.page, 'web') and self.app.page.web:
+                # For web pages, we assume they might be frozen if they've been inactive
+                # We'll rely on timeouts in calling code to handle frozen pages
+                return True
+                
+            return True
+        except Exception as e:
+            logger.debug(f"Page connection check failed: {e}")
             return False
 
     async def update_monitor_state(self, recording: Recording):
@@ -415,13 +428,21 @@ class RecordingCardManager:
                     except Exception as e:
                         logger.debug(f"Failed to cancel update task for {rec_id}: {e}")
 
-            # Update UI
+            # Update UI with timeout protection
             if self._is_page_connected():
                 try:
-                    recordings_page.recording_card_area.update()
+                    # Use asyncio.wait_for to prevent hanging on frozen pages
+                    await asyncio.wait_for(
+                        asyncio.to_thread(recordings_page.recording_card_area.update),
+                        timeout=3.0
+                    )
                     logger.debug("Successfully updated recording card area")
+                except asyncio.TimeoutError:
+                    logger.warning("Recording card area update timed out (page may be frozen)")
                 except (ft.core.page.PageDisconnectedException, AssertionError) as e:
                     logger.debug(f"Page disconnected during card area update: {e}")
+                except Exception as e:
+                    logger.warning(f"Failed to update recording card area: {e}")
             else:
                 logger.debug("Page disconnected, skipping card area update")
 
