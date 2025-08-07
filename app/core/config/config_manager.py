@@ -118,12 +118,65 @@ class ConfigManager:
     @staticmethod
     async def _save_config(config_path, config, success_message, error_message):
         """Save configuration to a JSON file."""
-        try:
-            async with aiofiles.open(config_path, "w", encoding="utf-8") as file:
-                await file.write(json.dumps(config, ensure_ascii=False, indent=4))
-            logger.info(success_message)
-        except Exception as e:
-            logger.error(f"{error_message}: {e}")
+        import time
+        import asyncio
+        
+        max_retries = 3
+        retry_delay = 0.1
+        
+        for attempt in range(max_retries):
+            try:
+                # 先验证数据是否可以序列化为JSON
+                json_data = json.dumps(config, ensure_ascii=False, indent=4)
+                
+                # 使用时间戳创建唯一的临时文件名，避免冲突
+                temp_path = f"{config_path}.tmp_{int(time.time() * 1000)}_{attempt}"
+                
+                # 确保临时文件不存在
+                if os.path.exists(temp_path):
+                    try:
+                        os.remove(temp_path)
+                    except:
+                        pass
+                
+                # 写入临时文件
+                async with aiofiles.open(temp_path, "w", encoding="utf-8") as file:
+                    await file.write(json_data)
+                
+                # 原子性替换文件 - 在Windows上使用更安全的方法
+                try:
+                    if os.path.exists(config_path):
+                        # 在Windows上，先删除目标文件
+                        os.remove(config_path)
+                    os.rename(temp_path, config_path)
+                    logger.info(success_message)
+                    return
+                except OSError as move_error:
+                    # 如果移动失败，尝试直接覆盖写入
+                    try:
+                        os.remove(temp_path)
+                    except:
+                        pass
+                    
+                    async with aiofiles.open(config_path, "w", encoding="utf-8") as file:
+                        await file.write(json_data)
+                    logger.info(success_message)
+                    return
+                    
+            except Exception as e:
+                logger.warning(f"Save attempt {attempt + 1} failed: {e}")
+                if attempt < max_retries - 1:
+                    await asyncio.sleep(retry_delay)
+                    retry_delay *= 2  # 指数退避
+                else:
+                    logger.error(f"{error_message}: {e}")
+                    # 最后的fallback - 直接写入
+                    try:
+                        async with aiofiles.open(config_path, "w", encoding="utf-8") as file:
+                            await file.write(json.dumps(config if config else [], ensure_ascii=False, indent=4))
+                        logger.info(f"Fallback save succeeded: {config_path}")
+                    except Exception as fallback_error:
+                        logger.error(f"Fallback save also failed: {fallback_error}")
 
     async def save_recordings_config(self, config):
         await self._save_config(

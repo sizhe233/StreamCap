@@ -56,6 +56,54 @@ class LiveStreamRecorder:
         for key in ("recording_manager", "stream_manager"):
             self._.update(language.get(key, {}))
 
+    async def safe_remove_recording(self, record_name: str, error_message: str = "录制失败已从任务列表中移除", duration: int = 3000):
+        """
+        Safely remove a failed recording with comprehensive error handling
+        """
+        removal_success = False
+        try:
+            # Step 1: Remove from backend task list
+            try:
+                await self.app.record_manager.remove_recording(self.recording)
+                logger.debug(f"Successfully removed recording from backend: {record_name}")
+            except Exception as e:
+                logger.warning(f"Failed to remove recording from backend: {e}")
+                # Continue with other steps even if this fails
+            
+            # Step 2: Remove UI card
+            try:
+                await self.app.record_card_manager.remove_recording_card([self.recording])
+                logger.debug(f"Successfully removed UI card: {record_name}")
+            except Exception as e:
+                logger.warning(f"Failed to remove UI card: {e}")
+                # Continue with other steps even if this fails
+            
+            # Step 3: Send pubsub notification
+            try:
+                self.app.page.pubsub.send_others_on_topic("delete", [self.recording])
+                logger.debug(f"Successfully sent pubsub notification: {record_name}")
+            except Exception as e:
+                logger.warning(f"Failed to send pubsub notification: {e}")
+                # Continue with other steps even if this fails
+            
+            # Step 4: Show notification
+            try:
+                await self.app.snack_bar.show_snack_bar(f"{record_name} {error_message}", duration)
+                logger.debug(f"Successfully showed notification: {record_name}")
+                removal_success = True
+            except Exception as e:
+                logger.warning(f"Failed to show notification: {e}")
+                
+        except Exception as e:
+            logger.error(f"Unexpected error during removal process: {e}")
+        
+        if removal_success:
+            logger.info(f"Successfully completed removal process for: {record_name}")
+        else:
+            logger.warning(f"Removal process completed with some failures for: {record_name}")
+        
+        return removal_success
+
     def _get_info(self, key: str, default: T = None) -> T:
         return self.recording_info.get(key, default) or default
 
@@ -366,15 +414,27 @@ class LiveStreamRecorder:
                 logger.error(f"FFmpeg Stderr Output: {str(stderr.decode()).splitlines()[0]}")
                 self.recording.status_info = RecordingStatus.RECORDING_ERROR
 
+                # Check if this is a 404 or similar critical error that should remove the task
+                stderr_output = str(stderr.decode()).lower()
+                is_critical_error = any(error in stderr_output for error in ['404', 'not found', 'connection refused', 'no route to host'])
+
                 try:
                     self.app.record_manager.stop_recording(self.recording)
-                    await self.app.record_card_manager.update_card(self.recording)
-                    self.app.page.pubsub.send_others_on_topic("update", self.recording)
-                    await self.app.snack_bar.show_snack_bar(
-                        record_name + " " + self._["record_stream_error"], duration=2000
-                    )
+                    
+                    if is_critical_error:
+                        # For critical errors like 404, remove from task list but keep downloaded files
+                        logger.info(f"Removing failed recording from task list due to critical error: {record_name}")
+                        
+                        # Execute removal in background to prevent UI freeze
+                        self.app.page.run_task(self.safe_remove_recording, record_name)
+                    else:
+                        # For other errors, just update the status
+                        self.app.page.run_task(self.app.record_card_manager.update_card, self.recording)
+                        self.app.page.pubsub.send_others_on_topic("update", self.recording)
+                        self.app.page.run_task(self.app.snack_bar.show_snack_bar,
+                                             record_name + " " + self._["record_stream_error"], 2000)
                 except Exception as e:
-                    logger.debug(f"Failed to update UI: {e}")
+                    logger.debug(f"Failed to handle recording error: {e}")
 
             if return_code in safe_return_code:
                 if self.recording.monitor_status:
@@ -453,15 +513,27 @@ class LiveStreamRecorder:
             logger.error(f"An error occurred during the subprocess execution: {e}")
             self.recording.status_info = RecordingStatus.RECORDING_ERROR
 
+            # Check if this is a critical error that should remove the task
+            error_message = str(e).lower()
+            is_critical_error = any(error in error_message for error in ['404', 'not found', 'connection refused', 'no route to host'])
+
             try:
                 self.app.record_manager.stop_recording(self.recording)
-                await self.app.record_card_manager.update_card(self.recording)
-                self.app.page.pubsub.send_others_on_topic("update", self.recording)
-                await self.app.snack_bar.show_snack_bar(
-                    record_name + " " + self._["no_ffmpeg_tip"], duration=4000
-                )
+                
+                if is_critical_error:
+                    # For critical errors, remove from task list but keep downloaded files
+                    logger.info(f"Removing failed recording from task list due to critical error: {record_name}")
+                    
+                    # Execute removal in background to prevent UI freeze
+                    self.app.page.run_task(self.safe_remove_recording, record_name, "录制失败已从任务列表中移除", 4000)
+                else:
+                    # For other errors, just update the status
+                    self.app.page.run_task(self.app.record_card_manager.update_card, self.recording)
+                    self.app.page.pubsub.send_others_on_topic("update", self.recording)
+                    self.app.page.run_task(self.app.snack_bar.show_snack_bar,
+                                         record_name + " " + self._["no_ffmpeg_tip"], 4000)
             except Exception as e:
-                logger.debug(f"Failed to update UI: {e}")
+                logger.debug(f"Failed to handle recording error: {e}")
             return False
         finally:
             self.recording.record_url = None
@@ -750,16 +822,18 @@ class LiveStreamRecorder:
                 self.recording.status_info = RecordingStatus.RECORDING_ERROR
                 self.recording.is_recording = False
                 
-                # Stop the recording task
+                # For FLV/HLS custom streams, remove from task list but keep downloaded files
                 try:
                     self.app.record_manager.stop_recording(self.recording)
-                    await self.app.record_card_manager.update_card(self.recording)
-                    self.app.page.pubsub.send_others_on_topic("update", self.recording)
-                    await self.app.snack_bar.show_snack_bar(
-                        record_name + " 直播流下载失败 (404错误)", duration=3000
-                    )
+                    
+                    # Remove the recording from the backend task list
+                    logger.info(f"Removing failed recording from task list: {record_name}")
+                    
+                    # Execute removal in background to prevent UI freeze
+                    self.app.page.run_task(self.safe_remove_recording, record_name, "录制失败已从任务列表中移除 (404错误)")
+                    
                 except Exception as e:
-                    logger.debug(f"Failed to update UI after download failure: {e}")
+                    logger.debug(f"Failed to remove failed recording from task list: {e}")
                 
                 return False
             
@@ -822,15 +896,27 @@ class LiveStreamRecorder:
             self.recording.status_info = RecordingStatus.RECORDING_ERROR
             self.recording.is_recording = False
 
+            # Check if this is a critical error that should remove the task
+            error_message = str(e).lower()
+            is_critical_error = any(error in error_message for error in ['404', 'not found', 'connection refused', 'no route to host'])
+
             try:
                 self.app.record_manager.stop_recording(self.recording)
-                await self.app.record_card_manager.update_card(self.recording)
-                self.app.page.pubsub.send_others_on_topic("update", self.recording)
-                await self.app.snack_bar.show_snack_bar(
-                    record_name + " " + self._["record_stream_error"], duration=2000
-                )
+                
+                if is_critical_error:
+                    # For critical errors, remove from task list but keep downloaded files
+                    logger.info(f"Removing failed recording from task list due to critical error: {record_name}")
+                    
+                    # Execute removal in background to prevent UI freeze
+                    self.app.page.run_task(self.safe_remove_recording, record_name)
+                else:
+                    # For other errors, just update the status
+                    self.app.page.run_task(self.app.record_card_manager.update_card, self.recording)
+                    self.app.page.pubsub.send_others_on_topic("update", self.recording)
+                    self.app.page.run_task(self.app.snack_bar.show_snack_bar,
+                                         record_name + " " + self._["record_stream_error"], 2000)
             except Exception as e:
-                logger.debug(f"Failed to update UI: {e}")
+                logger.debug(f"Failed to handle direct download error: {e}")
             return False
         finally:
             self.recording.record_url = None

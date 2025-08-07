@@ -65,9 +65,17 @@ class RecordingManager:
             await self.persist_recordings()
 
     async def remove_recording(self, recording: Recording):
-        with GlobalRecordingState.lock:
-            GlobalRecordingState.recordings.remove(recording)
-            await self.persist_recordings()
+        try:
+            with GlobalRecordingState.lock:
+                if recording in GlobalRecordingState.recordings:
+                    GlobalRecordingState.recordings.remove(recording)
+                    logger.debug(f"Recording removed from list: {recording.rec_id}")
+                else:
+                    logger.warning(f"Recording not found in list: {recording.rec_id}")
+                await self.persist_recordings()
+        except Exception as e:
+            logger.error(f"Failed to remove recording {recording.rec_id}: {e}")
+            raise
 
     async def clear_all_recordings(self):
         with GlobalRecordingState.lock:

@@ -341,37 +341,63 @@ class RecordingCardManager:
     async def remove_recording_card(self, recordings: list[Recording]):
         try:
             recordings_page = self.app.current_page
+            if not recordings_page or not hasattr(recordings_page, 'recording_card_area'):
+                logger.warning("Recording page or card area not available")
+                return
 
             existing_ids = {rec.rec_id for rec in self.app.record_manager.recordings}
             remove_ids = {rec.rec_id for rec in recordings}
             keep_ids = existing_ids - remove_ids
 
-            cards_to_remove = [
-                card_data["card"]
-                for rec_id, card_data in self.cards_obj.items()
-                if rec_id not in keep_ids
-            ]
+            # Find cards to remove
+            cards_to_remove = []
+            for rec_id, card_data in self.cards_obj.items():
+                if rec_id not in keep_ids:
+                    cards_to_remove.append(card_data["card"])
+                    logger.debug(f"Marking card for removal: {rec_id}")
 
-            recordings_page.recording_card_area.content.controls = [
-                control
-                for control in recordings_page.recording_card_area.content.controls
-                if control not in cards_to_remove
-            ]
+            # Remove cards from UI
+            if hasattr(recordings_page.recording_card_area, 'content') and hasattr(recordings_page.recording_card_area.content, 'controls'):
+                original_count = len(recordings_page.recording_card_area.content.controls)
+                recordings_page.recording_card_area.content.controls = [
+                    control
+                    for control in recordings_page.recording_card_area.content.controls
+                    if control not in cards_to_remove
+                ]
+                new_count = len(recordings_page.recording_card_area.content.controls)
+                logger.debug(f"Removed {original_count - new_count} cards from UI")
 
+            # Clean up cards_obj
+            original_cards_count = len(self.cards_obj)
             self.cards_obj = {
                 k: v for k, v in self.cards_obj.items()
                 if k in keep_ids
             }
+            new_cards_count = len(self.cards_obj)
+            logger.debug(f"Cleaned up {original_cards_count - new_cards_count} card objects")
 
+            # Stop update tasks for removed cards
+            for rec_id in remove_ids:
+                if rec_id in self.update_duration_tasks:
+                    try:
+                        self.update_duration_tasks[rec_id].cancel()
+                        del self.update_duration_tasks[rec_id]
+                        logger.debug(f"Cancelled update task for: {rec_id}")
+                    except Exception as e:
+                        logger.debug(f"Failed to cancel update task for {rec_id}: {e}")
+
+            # Update UI
             try:
                 recordings_page.recording_card_area.update()
+                logger.debug("Successfully updated recording card area")
             except (ft.core.page.PageDisconnectedException, AssertionError) as e:
                 logger.debug(f"Update recording card area failed: {e}")
 
         except (ft.core.page.PageDisconnectedException, AssertionError) as e:
             logger.debug(f"Remove recording card failed: {e}")
         except Exception as e:
-            logger.debug(f"Remove recording card failed: {e}")
+            logger.error(f"Remove recording card failed: {e}")
+            raise
 
     @staticmethod
     async def update_record_hover(recording: Recording):
