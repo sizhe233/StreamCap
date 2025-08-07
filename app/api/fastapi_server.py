@@ -598,14 +598,30 @@ class FastAPIServer:
             # 开始监控录制
             await record_manager.start_monitor_recording(recording)
             
-            # 更新UI - 创建录制卡片
-            if hasattr(self.app_manager, 'record_card_manager'):
-                card = await self.app_manager.record_card_manager.create_card(recording)
-                # 如果当前页面是录制页面，添加卡片到UI
-                if (hasattr(self.app_manager, 'current_page') and 
-                    hasattr(self.app_manager.current_page, 'recording_card_area')):
-                    self.app_manager.current_page.recording_card_area.content.controls.append(card)
-                    self.app_manager.current_page.recording_card_area.update()
+            # 更新UI - 创建录制卡片并通过pubsub通知UI更新
+            if hasattr(self.app_manager, 'page') and hasattr(self.app_manager.page, 'pubsub'):
+                # 创建录制卡片
+                if hasattr(self.app_manager, 'record_card_manager'):
+                    try:
+                        # 创建卡片
+                        card = await self.app_manager.record_card_manager.create_card(recording)
+                        
+                        # 设置计划时间范围
+                        recording.scheduled_time_range = await self.app_manager.record_manager.get_scheduled_time_range(
+                            recording.scheduled_start_time, recording.monitor_hours
+                        )
+                        
+                        # 通过pubsub通知UI更新，这会触发subscribe_add_cards方法
+                        self.app_manager.page.pubsub.send_others_on_topic("add", recording)
+                        logger.info(f"已创建录制卡片并通过pubsub通知UI更新: {recording.streamer_name}")
+                    except Exception as e:
+                        logger.error(f"创建录制卡片失败: {str(e)}")
+                        # 即使卡片创建失败，也要发送pubsub消息
+                        self.app_manager.page.pubsub.send_others_on_topic("add", recording)
+                else:
+                    # 如果没有record_card_manager，只发送pubsub消息
+                    self.app_manager.page.pubsub.send_others_on_topic("add", recording)
+                    logger.info(f"已通过pubsub通知UI更新录制任务: {recording.streamer_name}")
             
             logger.info(f"成功创建并启动录制任务: {recording.rec_id}")
             return recording.rec_id

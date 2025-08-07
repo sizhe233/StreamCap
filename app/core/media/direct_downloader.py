@@ -53,9 +53,9 @@ class DirectStreamDownloader:
         try:
             os.makedirs(os.path.dirname(self.save_path), exist_ok=True)
 
-            async with httpx.AsyncClient(headers=self.headers, proxy=self.proxy, timeout=None) as client:
+            async with httpx.AsyncClient(headers=self.headers, proxy=self.proxy, timeout=None, follow_redirects=True) as client:
                 async with client.stream("GET", self.record_url) as response:
-                    if response.status_code != 200:
+                    if response.status_code not in [200, 206]:  # 200: OK, 206: Partial Content
                         logger.error(f"Request Stream Failed, Status Code: {response.status_code}")
                         return
 

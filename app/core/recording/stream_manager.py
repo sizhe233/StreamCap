@@ -688,6 +688,8 @@ class LiveStreamRecorder:
             logger.info(f"Direct Downloading: {live_url}")
             logger.log("STREAM", f"Direct Download Stream URL: {record_url}")
 
+            download_completed_successfully = False
+            
             while True:
                 if not self.recording.is_recording or not self.app.recording_enabled:
                     logger.info(f"Prepare to end direct download: {live_url}")
@@ -697,6 +699,9 @@ class LiveStreamRecorder:
                 await asyncio.sleep(1)
 
                 if self.direct_downloader.download_task and self.direct_downloader.download_task.done():
+                    # Check if download completed successfully by checking if any data was downloaded
+                    if self.direct_downloader.total_bytes > 0:
+                        download_completed_successfully = True
                     break
 
             if self.recording.monitor_status:
@@ -709,10 +714,13 @@ class LiveStreamRecorder:
             self.recording.live_title = None
             if not self.recording.is_recording:
                 logger.success(f"Direct Downloading Stopped: {record_name}")
-            else:
+            elif download_completed_successfully:
                 logger.success(f"Direct Downloading Completed: {record_name}")
                 self.app.page.run_task(self.end_message_push)
                 self.recording.is_recording = False
+            else:
+                logger.warning(f"Direct Downloading Failed: {record_name}")
+                self.recording.status_info = RecordingStatus.RECORDING_ERROR
 
             try:
                 self.recording.update({"display_title": display_title})
