@@ -236,7 +236,17 @@ class LiveStreamRecorder:
 
             # Create speed update callback
             def speed_update_callback(total_bytes: int, elapsed_time: float):
-                self.recording.update_speed(total_bytes, elapsed_time)
+                if elapsed_time > 0:
+                    bytes_per_sec = total_bytes / elapsed_time
+                    if bytes_per_sec >= 1024 * 1024:  # MB/s
+                        self.recording.speed = f"{bytes_per_sec / (1024 * 1024):.1f} MB/s"
+                    elif bytes_per_sec >= 1024:  # KB/s
+                        self.recording.speed = f"{bytes_per_sec / 1024:.0f} KB/s"
+                    else:  # B/s
+                        self.recording.speed = f"{bytes_per_sec:.0f} B/s"
+                else:
+                    self.recording.speed = "0 B/s"
+                
                 # Update UI asynchronously
                 try:
                     self.app.page.run_task(self.app.record_card_manager.update_card, self.recording)
@@ -476,30 +486,56 @@ class LiveStreamRecorder:
                             bytes_diff = current_size - last_size
                             time_diff = current_time - last_time
                             
-                            if time_diff > 0:
+                            if time_diff > 0 and bytes_diff >= 0:
                                 bytes_per_sec = bytes_diff / time_diff
                                 if bytes_per_sec >= 1024 * 1024:  # MB/s
                                     self.recording.speed = f"{bytes_per_sec / (1024 * 1024):.1f} MB/s"
-                                else:  # KB/s
+                                elif bytes_per_sec >= 1024:  # KB/s
                                     self.recording.speed = f"{bytes_per_sec / 1024:.0f} KB/s"
+                                else:  # B/s
+                                    self.recording.speed = f"{bytes_per_sec:.0f} B/s"
+                            else:
+                                self.recording.speed = "0 B/s"
                                 
-                                # Update UI
-                                try:
-                                    self.app.page.run_task(self.app.record_card_manager.update_card, self.recording)
-                                except Exception as e:
-                                    logger.debug(f"Failed to update speed in UI: {e}")
+                            # Update UI
+                            try:
+                                self.app.page.run_task(self.app.record_card_manager.update_card, self.recording)
+                            except Exception as e:
+                                logger.debug(f"Failed to update speed in UI: {e}")
                             
                             last_size = current_size
                             last_time = current_time
+                    else:
+                        # File doesn't exist yet, set speed to 0
+                        self.recording.speed = "0 B/s"
+                        try:
+                            self.app.page.run_task(self.app.record_card_manager.update_card, self.recording)
+                        except Exception as e:
+                            logger.debug(f"Failed to update speed in UI: {e}")
                     
                 except (OSError, FileNotFoundError):
                     # File might not exist yet or be temporarily unavailable
-                    pass
+                    self.recording.speed = "0 B/s"
+                    try:
+                        self.app.page.run_task(self.app.record_card_manager.update_card, self.recording)
+                    except Exception as e:
+                        logger.debug(f"Failed to update speed in UI: {e}")
                     
         except asyncio.CancelledError:
             logger.debug("FFmpeg speed monitoring cancelled")
+            # Set speed to 0 when cancelled
+            self.recording.speed = "0 B/s"
+            try:
+                self.app.page.run_task(self.app.record_card_manager.update_card, self.recording)
+            except Exception as e:
+                logger.debug(f"Failed to update speed in UI: {e}")
         except Exception as e:
             logger.debug(f"Error in FFmpeg speed monitoring: {e}")
+            self.recording.speed = "0 B/s"
+            try:
+                self.app.page.run_task(self.app.record_card_manager.update_card, self.recording)
+            except Exception as e:
+                logger.debug(f"Failed to update speed in UI: {e}")
 
     async def converts_mp4(self, converts_file_path: str, is_original_delete: bool = True) -> None:
         """Asynchronous transcoding method, can be added to the background service to continue execution"""
@@ -689,6 +725,7 @@ class LiveStreamRecorder:
             logger.log("STREAM", f"Direct Download Stream URL: {record_url}")
 
             download_completed_successfully = False
+            download_failed = False
             
             while True:
                 if not self.recording.is_recording or not self.app.recording_enabled:
@@ -702,8 +739,38 @@ class LiveStreamRecorder:
                     # Check if download completed successfully by checking if any data was downloaded
                     if self.direct_downloader.total_bytes > 0:
                         download_completed_successfully = True
+                    else:
+                        # Check if download failed (no data downloaded and task is done)
+                        download_failed = True
                     break
 
+            # Handle different completion scenarios
+            if download_failed:
+                logger.warning(f"Direct Downloading Failed: {record_name}")
+                self.recording.status_info = RecordingStatus.RECORDING_ERROR
+                self.recording.is_recording = False
+                
+                # Stop the recording task
+                try:
+                    self.app.record_manager.stop_recording(self.recording)
+                    await self.app.record_card_manager.update_card(self.recording)
+                    self.app.page.pubsub.send_others_on_topic("update", self.recording)
+                    await self.app.snack_bar.show_snack_bar(
+                        record_name + " 直播流下载失败 (404错误)", duration=3000
+                    )
+                except Exception as e:
+                    logger.debug(f"Failed to update UI after download failure: {e}")
+                
+                return False
+            
+            elif download_completed_successfully:
+                logger.success(f"Direct Downloading Completed: {record_name}")
+                self.app.page.run_task(self.end_message_push)
+                self.recording.is_recording = False
+            else:
+                logger.success(f"Direct Downloading Stopped: {record_name}")
+
+            # Set appropriate status based on monitor settings
             if self.recording.monitor_status:
                 self.recording.status_info = RecordingStatus.MONITORING
                 display_title = self.recording.title
@@ -712,15 +779,6 @@ class LiveStreamRecorder:
                 display_title = self.recording.display_title
 
             self.recording.live_title = None
-            if not self.recording.is_recording:
-                logger.success(f"Direct Downloading Stopped: {record_name}")
-            elif download_completed_successfully:
-                logger.success(f"Direct Downloading Completed: {record_name}")
-                self.app.page.run_task(self.end_message_push)
-                self.recording.is_recording = False
-            else:
-                logger.warning(f"Direct Downloading Failed: {record_name}")
-                self.recording.status_info = RecordingStatus.RECORDING_ERROR
 
             try:
                 self.recording.update({"display_title": display_title})
@@ -733,7 +791,7 @@ class LiveStreamRecorder:
             except Exception as e:
                 logger.debug(f"Failed to update UI: {e}")
 
-            if self.user_config.get("execute_custom_script") and script_command:
+            if self.user_config.get("execute_custom_script") and script_command and download_completed_successfully:
                 logger.info("Prepare to execute custom script in the background")
                 try:
                     self.app.page.run_task(
@@ -757,11 +815,12 @@ class LiveStreamRecorder:
                         False
                     )
 
-            return True
+            return download_completed_successfully
 
         except Exception as e:
             logger.error(f"Error occurred during direct download: {e}")
             self.recording.status_info = RecordingStatus.RECORDING_ERROR
+            self.recording.is_recording = False
 
             try:
                 self.app.record_manager.stop_recording(self.recording)

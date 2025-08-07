@@ -56,7 +56,10 @@ class DirectStreamDownloader:
             async with httpx.AsyncClient(headers=self.headers, proxy=self.proxy, timeout=None, follow_redirects=True) as client:
                 async with client.stream("GET", self.record_url) as response:
                     if response.status_code not in [200, 206]:  # 200: OK, 206: Partial Content
-                        logger.error(f"Request Stream Failed, Status Code: {response.status_code}")
+                        if response.status_code == 404:
+                            logger.error(f"直播流不存在或已结束, Status Code: {response.status_code}")
+                        else:
+                            logger.error(f"Request Stream Failed, Status Code: {response.status_code}")
                         return
 
                     with open(self.save_path, 'wb') as f:
@@ -75,7 +78,10 @@ class DirectStreamDownloader:
                                     self.speed_callback(self.total_bytes, elapsed)
                                 self.last_speed_update = current_time
 
-            logger.success(f"Download Completed: {self.save_path}")
+            if self.total_bytes > 0:
+                logger.success(f"Download Completed: {self.save_path}")
+            else:
+                logger.warning(f"Download Failed - No data received: {self.save_path}")
 
         except asyncio.CancelledError:
             logger.info(f"Download Task Canceled: {self.record_url}")
