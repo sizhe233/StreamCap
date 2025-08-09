@@ -153,7 +153,7 @@ class FastAPIServer:
             version="1.0.0",
             contact={
                 "name": "StreamCap 开发团队",
-                "url": "https://github.com/your-repo/streamcap",
+                "url": "https://github.com/ihmily/StreamCap",
             },
             license_info={
                 "name": "MIT License",
