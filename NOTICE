@@ -1,0 +1,21 @@
+StreamCap Fork
+Copyright 2025 sizhe233
+
+This product includes software developed by ihmily (https://github.com/ihmily/StreamCap).
+
+Original project: StreamCap
+Original author: ihmily
+Original repository: https://github.com/ihmily/StreamCap
+Original license: Apache License 2.0
+
+This fork contains modifications and enhancements including:
+- FastAPI interface support
+- Custom stream detection optimization
+- Recording speed monitoring
+- Error handling improvements
+- UI update optimizations
+- File system compatibility fixes
+- Logging system optimizations
+- New status management features
+
+All modifications are also licensed under the Apache License 2.0.

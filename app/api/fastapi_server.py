@@ -122,11 +122,12 @@ class FastAPIServer:
         
         # 创建FastAPI应用
         self.fastapi_app = FastAPI(
-            title="StreamCap 直播录制 API",
+            title="StreamCap Fork 直播录制 API",
             description="""
-## StreamCap 直播录制控制 API
+## StreamCap Fork 直播录制控制 API
 
-这是一个用于控制直播录制的 RESTful API 服务。
+这是一个用于控制直播录制的 RESTful API 服务（增强版本）。
+基于 [ihmily/StreamCap](https://github.com/ihmily/StreamCap) 开发，包含额外的功能和优化。
 
 ### 主要功能
 - 🎥 **开始录制**: 通过提供主播名称和流地址开始录制
@@ -152,12 +153,12 @@ class FastAPIServer:
             """,
             version="1.0.0",
             contact={
-                "name": "StreamCap 开发团队",
-                "url": "https://github.com/ihmily/StreamCap",
+                "name": "StreamCap Fork - sizhe233",
+                "url": "https://github.com/sizhe233/StreamCap",
             },
             license_info={
-                "name": "MIT License",
-                "url": "https://opensource.org/licenses/MIT",
+                "name": "Apache License 2.0",
+                "url": "https://www.apache.org/licenses/LICENSE-2.0",
             },
         )
         
