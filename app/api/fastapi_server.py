@@ -243,6 +243,8 @@ class FastAPIServer:
             **注意事项:**
             - 同一主播名称只能有一个录制任务
             - 流地址必须是有效的 FLV 或 M3U8 格式
+            - 自定义流任务会直接开始录制，无需等待检测
+            - 录制完成或失败后，任务会自动从列表中移除
             """
             try:
                 if not self.app_manager:
@@ -572,7 +574,7 @@ class FastAPIServer:
             recording_data = {
                 "rec_id": str(uuid.uuid4())[:8],
                 "url": stream_data.record_url,
-                "streamer_name": stream_data.anchor_name,
+                "streamer_name": f"[自定义流] {stream_data.anchor_name}",  # 添加标识
                 "quality": request.record_quality or "OD",
                 "record_format": "flv",  # 使用FLV格式，更安全，异常停止不会损坏文件
                 "segment_record": False,
@@ -595,7 +597,9 @@ class FastAPIServer:
             # 添加到录制管理器
             await record_manager.add_recording(recording)
             
-            # 开始监控录制
+            # 对于自定义流，直接开始录制而不是监控
+            # 这样可以避免不必要的定时检测，减少被限流的风险
+            logger.info(f"API自定义流任务直接开始录制: {recording.streamer_name}")
             await record_manager.start_monitor_recording(recording)
             
             # 更新UI - 通过pubsub通知UI更新，让UI自己创建卡片

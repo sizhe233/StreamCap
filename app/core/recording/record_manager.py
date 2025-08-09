@@ -118,7 +118,14 @@ class RecordingManager:
                 status_info=RecordingStatus.MONITORING,
                 selected=False,
             )
-            self.app.page.run_task(self.check_if_live, recording)
+            
+            # For custom streams, directly start recording without live checking
+            if recording.platform_key == "custom":
+                logger.info(f"Starting custom stream recording directly: {recording.url}")
+                self.app.page.run_task(self._start_custom_stream_recording, recording)
+            else:
+                self.app.page.run_task(self.check_if_live, recording)
+                
             self.app.page.run_task(self.app.record_card_manager.update_card, recording)
             self.app.page.pubsub.send_others_on_topic("update", recording)
             if auto_save:
@@ -186,23 +193,144 @@ class RecordingManager:
                 return rec
         return None
 
-    async def check_all_live_status(self):
-        """Check the live status of all recordings and update their display titles."""
+    async def check_all_live_status(self, startup_mode: bool = False):
+        """
+        Check the live status of all recordings and update their display titles.
+        
+        Args:
+            startup_mode: If True, use staggered checking to avoid rate limiting during startup
+        """
+        recordings_to_check = []
+        
         for recording in self.recordings:
             if recording.monitor_status and not recording.is_recording:
-                is_exceeded = utils.is_time_interval_exceeded(recording.detection_time, recording.loop_time_seconds)
-                if not recording.detection_time or is_exceeded:
-                    self.app.page.run_task(self.check_if_live, recording)
+                if startup_mode:
+                    # During startup, check all recordings including custom streams
+                    recordings_to_check.append(recording)
+                else:
+                    # During normal periodic runs, skip custom streams as they don't need live checking
+                    if recording.platform_key == "custom":
+                        continue
+                        
+                    is_exceeded = utils.is_time_interval_exceeded(recording.detection_time, recording.loop_time_seconds)
+                    if not recording.detection_time or is_exceeded:
+                        recordings_to_check.append(recording)
+        
+        if not recordings_to_check:
+            return
+            
+        if startup_mode:
+            # Staggered checking during startup to avoid rate limiting
+            logger.info(f"启动时逐一检测 {len(recordings_to_check)} 个录制任务（包括自定义流），避免限流")
+            await self._staggered_live_check(recordings_to_check, startup_mode=True)
+        else:
+            # Normal checking during periodic runs
+            for recording in recordings_to_check:
+                self.app.page.run_task(self.check_if_live, recording)
+
+    async def _staggered_live_check(self, recordings_to_check: list, startup_mode: bool = False):
+        """
+        Perform staggered live checking to avoid rate limiting.
+        
+        Args:
+            recordings_to_check: List of recordings that need to be checked
+            startup_mode: If True, handle custom streams differently during startup
+        """
+        if not recordings_to_check:
+            return
+            
+        # Group recordings by platform to avoid hitting the same platform too frequently
+        platform_groups = defaultdict(list)
+        custom_streams = []
+        
+        for recording in recordings_to_check:
+            platform_key = recording.platform_key or "unknown"
+            if platform_key == "custom":
+                custom_streams.append(recording)
+            else:
+                platform_groups[platform_key].append(recording)
+        
+        # Get startup check interval from settings, with fallback
+        startup_interval = int(self.settings.user_config.get("startup_check_interval", 3))
+        # Calculate stagger interval based on configuration and number of recordings
+        # Minimum 2 seconds, maximum 10 seconds per recording
+        base_interval = max(2, min(10, startup_interval))
+        
+        logger.info(f"开始逐一检测，基础间隔: {base_interval}秒")
+        
+        # Handle custom streams first during startup
+        if startup_mode and custom_streams:
+            logger.info(f"启动时检测 {len(custom_streams)} 个自定义流任务")
+            for i, recording in enumerate(custom_streams):
+                try:
+                    if (recording in self.recordings and 
+                        recording.monitor_status and 
+                        not recording.is_recording):
+                        
+                        logger.debug(f"检测自定义流任务 {i+1}/{len(custom_streams)}: {recording.streamer_name}")
+                        # For custom streams during startup, directly start recording if monitoring
+                        self.app.page.run_task(self._start_custom_stream_recording, recording)
+                        
+                        # Wait between custom stream checks
+                        if i < len(custom_streams) - 1:
+                            await asyncio.sleep(base_interval)
+                    
+                except Exception as e:
+                    logger.error(f"检测自定义流任务时出错 {recording.streamer_name}: {e}")
+                    continue
+            
+            # Wait before checking platform streams
+            if platform_groups:
+                await asyncio.sleep(base_interval * 2)
+        
+        # Handle platform streams
+        for platform_key, platform_recordings in platform_groups.items():
+            logger.info(f"检测平台 {platform_key} 的 {len(platform_recordings)} 个任务")
+            
+            for i, recording in enumerate(platform_recordings):
+                try:
+                    # Check if the recording is still valid and needs checking
+                    if (recording in self.recordings and 
+                        recording.monitor_status and 
+                        not recording.is_recording):
+                        
+                        logger.debug(f"检测任务 {i+1}/{len(platform_recordings)}: {recording.streamer_name}")
+                        self.app.page.run_task(self.check_if_live, recording)
+                        
+                        # Wait between checks, with longer intervals for the same platform
+                        if i < len(platform_recordings) - 1:  # Don't wait after the last recording
+                            await asyncio.sleep(base_interval)
+                    
+                except Exception as e:
+                    logger.error(f"检测任务时出错 {recording.streamer_name}: {e}")
+                    continue
+            
+            # Wait longer between different platforms
+            if len(platform_groups) > 1:
+                await asyncio.sleep(base_interval * 2)
+        
+        logger.info("启动时逐一检测完成")
 
     async def setup_periodic_live_check(self, interval: int = 180):
         """Set up a periodic task to check live status."""
 
         async def periodic_check():
+            # First run: perform startup check with staggered intervals
+            first_run = True
+            
             while True:
-                await asyncio.sleep(interval)
-                await self.check_free_space()
-                if self.app.recording_enabled:
-                    await self.check_all_live_status()
+                if first_run:
+                    logger.info("程序启动，开始逐一检测现有录制任务")
+                    await self.check_free_space()
+                    if self.app.recording_enabled:
+                        await self.check_all_live_status(startup_mode=True)
+                    first_run = False
+                else:
+                    # Regular periodic checks
+                    await asyncio.sleep(interval)
+                    await self.check_free_space()
+                    if self.app.recording_enabled:
+                        await self.check_all_live_status(startup_mode=False)
 
         if not self.periodic_task_started:
             self.periodic_task_started = True
@@ -219,6 +347,11 @@ class RecordingManager:
             recording.status_info = RecordingStatus.STOPPED_MONITORING
 
         elif not recording.is_checking:
+            # Skip live checking for custom streams during normal periodic runs
+            # Custom streams are handled separately during startup
+            if recording.platform_key == "custom":
+                logger.debug(f"Skipping periodic live check for custom stream: {recording.url}")
+                return
             recording.status_info = RecordingStatus.STATUS_CHECKING
             recording.detection_time = datetime.now().time()
             if recording.scheduled_recording and recording.scheduled_start_time and recording.monitor_hours:
@@ -424,6 +557,64 @@ class RecordingManager:
 
         else:
             self.app.recording_enabled = True
+
+    async def _start_custom_stream_recording(self, recording: Recording):
+        """
+        Start recording for custom streams (FLV/M3U8) directly without live checking
+        """
+        try:
+            recording.status_info = RecordingStatus.PREPARING_RECORDING
+            recording.is_live = True
+            recording.is_checking = False
+            
+            # Create a basic stream info for custom streams
+            from ..platforms.platform_handlers import StreamData
+            stream_info = StreamData(
+                platform="Custom", 
+                anchor_name=recording.streamer_name or "CustomLive", 
+                is_live=True, 
+                record_url=recording.url
+            )
+            
+            if ".flv" in recording.url:
+                stream_info.flv_url = recording.url
+            elif ".m3u8" in recording.url:
+                stream_info.m3u8_url = recording.url
+                
+            output_dir = self.settings.get_video_save_path()
+            await self.check_free_space(output_dir)
+            
+            if not self.app.recording_enabled:
+                recording.status_info = RecordingStatus.NOT_RECORDING_SPACE
+                return
+                
+            recording_info = {
+                "platform": "Custom",
+                "platform_key": "custom",
+                "live_url": recording.url,
+                "output_dir": output_dir,
+                "segment_record": recording.segment_record,
+                "segment_time": recording.segment_time,
+                "save_format": recording.record_format,
+                "quality": recording.quality,
+            }
+            
+            from .stream_manager import LiveStreamRecorder
+            recorder = LiveStreamRecorder(self.app, recording, recording_info)
+            
+            # Start recording directly
+            recording.status_info = RecordingStatus.PREPARING_RECORDING
+            recording.loop_time_seconds = self.loop_time_seconds
+            self.start_update(recording)
+            self.app.page.run_task(recorder.start_recording, stream_info)
+            
+            self.app.page.run_task(self.app.record_card_manager.update_card, recording)
+            self.app.page.pubsub.send_others_on_topic("update", recording)
+            
+        except Exception as e:
+            logger.error(f"Failed to start custom stream recording: {e}")
+            recording.status_info = RecordingStatus.RECORDING_ERROR
+            self.app.page.run_task(self.app.record_card_manager.update_card, recording)
 
     @staticmethod
     async def get_scheduled_time_range(scheduled_start_time, monitor_hours) -> str | None:

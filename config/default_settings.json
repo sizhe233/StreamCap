@@ -12,6 +12,7 @@
     "video_format": "TS",
     "record_quality": "OD",
     "loop_time_seconds": "180",
+    "startup_check_interval": "3",
     "segmented_recording_enabled": true,
     "force_https_recording": true,
     "default_live_source": "FLV",

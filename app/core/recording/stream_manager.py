@@ -549,6 +549,21 @@ class LiveStreamRecorder:
                     logger.debug(f"Failed to handle recording error: {e}")
 
             if return_code in safe_return_code:
+                # For custom streams (FLV/M3U8), automatically remove task after completion
+                # since these are typically one-time URLs that won't restart
+                if self.platform_key == "custom" and self.recording.monitor_status:
+                    logger.info(f"Custom stream completed, removing task: {record_name}")
+                    self.recording.monitor_status = False
+                    self.recording.status_info = RecordingStatus.CUSTOM_STREAM_COMPLETED
+                    
+                    # Auto-remove custom stream task after completion
+                    try:
+                        logger.info(f"Auto-removing completed custom stream task: {record_name}")
+                        self.safe_remove_recording_sync(record_name, "自定义流录制完成，任务已自动移除")
+                        return  # Exit early since task is removed
+                    except Exception as e:
+                        logger.error(f"Failed to auto-remove custom stream task {record_name}: {e}")
+                
                 if self.recording.monitor_status:
                     self.recording.status_info = RecordingStatus.MONITORING
                     display_title = self.recording.title
@@ -937,18 +952,24 @@ class LiveStreamRecorder:
                 self.recording.status_info = RecordingStatus.RECORDING_ERROR
                 self.recording.is_recording = False
                 
-                # For FLV/HLS custom streams, remove from task list but keep downloaded files
+                # For custom streams, automatically remove failed tasks
                 try:
                     self.app.record_manager.stop_recording(self.recording)
                     
-                    # Remove the recording from the backend task list
-                    logger.info(f"Removing failed recording from task list: {record_name}")
-                    
-                    # Execute removal immediately without blocking
-                    try:
-                        self.safe_remove_recording_sync(record_name, "录制失败已从任务列表中移除 (404错误)")
-                    except Exception as e:
-                        logger.error(f"Failed to remove recording {record_name}: {e}")
+                    # For custom streams, auto-remove failed tasks
+                    if self.platform_key == "custom":
+                        logger.info(f"Auto-removing failed custom stream task: {record_name}")
+                        try:
+                            self.safe_remove_recording_sync(record_name, "自定义流录制失败，任务已自动移除")
+                        except Exception as e:
+                            logger.error(f"Failed to auto-remove failed custom stream task {record_name}: {e}")
+                    else:
+                        # For platform streams, just remove from task list but keep downloaded files
+                        logger.info(f"Removing failed recording from task list: {record_name}")
+                        try:
+                            self.safe_remove_recording_sync(record_name, "录制失败已从任务列表中移除")
+                        except Exception as e:
+                            logger.error(f"Failed to remove recording {record_name}: {e}")
                     
                 except Exception as e:
                     logger.debug(f"Failed to remove failed recording from task list: {e}")
@@ -959,6 +980,22 @@ class LiveStreamRecorder:
                 logger.success(f"Direct Downloading Completed: {record_name}")
                 self.app.page.run_task(self.end_message_push)
                 self.recording.is_recording = False
+                
+                # For custom streams (FLV/M3U8), automatically remove task after completion
+                # since these are typically one-time URLs that won't restart
+                if self.platform_key == "custom":
+                    logger.info(f"Custom stream completed, removing task: {record_name}")
+                    self.recording.monitor_status = False
+                    self.recording.status_info = RecordingStatus.CUSTOM_STREAM_COMPLETED
+                    
+                    # Auto-remove custom stream task after completion
+                    try:
+                        logger.info(f"Auto-removing completed custom stream task: {record_name}")
+                        self.safe_remove_recording_sync(record_name, "自定义流录制完成，任务已自动移除")
+                        return  # Exit early since task is removed
+                    except Exception as e:
+                        logger.error(f"Failed to auto-remove custom stream task {record_name}: {e}")
+                    
             else:
                 logger.success(f"Direct Downloading Stopped: {record_name}")
 
