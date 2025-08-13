@@ -575,7 +575,7 @@ class FastAPIServer:
             recording_data = {
                 "rec_id": str(uuid.uuid4())[:8],
                 "url": stream_data.record_url,
-                "streamer_name": f"[自定义流] {stream_data.anchor_name}",  # 添加标识
+                "streamer_name": f"{stream_data.anchor_name}",  # 添加标识
                 "quality": request.record_quality or "OD",
                 "record_format": "flv",  # 使用FLV格式，更安全，异常停止不会损坏文件
                 "segment_record": False,
