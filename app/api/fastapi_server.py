@@ -682,24 +682,24 @@ class FastAPIServer:
                         self.app_manager.page.pubsub.send_others_on_topic("add", recording)
                         logger.info(f"已通过pubsub发送'add'通知: {recording.streamer_name}")
                         
-                    # 延迟强制刷新UI，确保所有操作完成
-                    async def delayed_ui_refresh():
-                        await asyncio.sleep(0.5)  # 等待500ms确保所有操作完成
+                    # 智能延迟UI验证，避免重复刷新
+                    async def delayed_ui_validation():
+                        await asyncio.sleep(0.8)  # 等待800ms确保所有操作完成
                         try:
                             # 检查页面连接状态
                             if not self.app_manager.record_card_manager._is_page_connected():
-                                logger.debug("页面已断开连接，跳过延迟刷新")
+                                logger.debug("页面已断开连接，跳过延迟验证")
                                 return
                                 
                             if (hasattr(self.app_manager, 'current_page') and 
                                 self.app_manager.current_page and 
                                 hasattr(self.app_manager.current_page, 'recording_card_area')):
                                 
-                                # 如果卡片还没有显示，检查是否需要重新创建
+                                # 只验证卡片状态，不强制刷新页面
                                 if recording.rec_id not in self.app_manager.record_card_manager.cards_obj:
-                                    logger.warning(f"卡片未显示，尝试重新创建: {recording.streamer_name}")
+                                    logger.debug(f"卡片未在管理器中注册，检查UI状态: {recording.streamer_name}")
                                     try:
-                                        # 检查卡片是否已经在UI中存在但未在管理器中注册
+                                        # 检查卡片是否已经在UI中存在
                                         page = self.app_manager.current_page
                                         existing_cards = page.recording_card_area.content.controls if hasattr(page, 'recording_card_area') else []
                                         
@@ -708,37 +708,31 @@ class FastAPIServer:
                                         for existing_card in existing_cards:
                                             if hasattr(existing_card, 'data') and existing_card.data == recording.rec_id:
                                                 card_exists = True
-                                                logger.debug(f"发现已存在的卡片，跳过重复创建: {recording.rec_id}")
+                                                logger.debug(f"卡片已在UI中存在: {recording.rec_id}")
                                                 break
                                         
                                         if not card_exists:
-                                            # 只有在确实不存在时才重新创建
+                                            # 静默重新创建，不强制刷新整个页面
+                                            logger.info(f"静默重新创建缺失的卡片: {recording.streamer_name}")
                                             new_card = await self.app_manager.record_card_manager.create_card(recording)
                                             if new_card and self.app_manager.record_card_manager._is_page_connected():
                                                 # 设置卡片数据标识
                                                 new_card.data = recording.rec_id
                                                 page.recording_card_area.content.controls.append(new_card)
+                                                # 只更新卡片区域，不刷新整个页面
                                                 page.recording_card_area.update()
-                                                logger.info(f"延迟创建卡片成功: {recording.streamer_name}")
+                                                logger.debug(f"静默创建卡片成功: {recording.streamer_name}")
                                             else:
-                                                logger.warning(f"延迟创建卡片失败: {recording.streamer_name}")
+                                                logger.debug(f"静默创建卡片失败: {recording.streamer_name}")
                                     except Exception as create_error:
-                                        logger.error(f"延迟创建卡片失败: {create_error}")
+                                        logger.debug(f"静默创建卡片过程失败: {create_error}")
                                 else:
-                                    # 只是更新页面
-                                    try:
-                                        if self.app_manager.record_card_manager._is_page_connected():
-                                            self.app_manager.page.update()
-                                            logger.debug("延迟页面更新完成")
-                                        else:
-                                            logger.debug("页面在更新前断开连接")
-                                    except (Exception) as update_error:
-                                        logger.warning(f"延迟页面更新失败: {update_error}")
+                                    logger.debug(f"卡片状态正常: {recording.streamer_name}")
                         except Exception as e:
-                            logger.warning(f"延迟页面更新过程失败: {e}")
+                            logger.debug(f"延迟UI验证过程失败: {e}")
                     
-                    # 创建延迟刷新任务
-                    asyncio.create_task(delayed_ui_refresh())
+                    # 创建延迟验证任务（不是刷新任务）
+                    asyncio.create_task(delayed_ui_validation())
                         
                 else:
                     logger.warning("页面或pubsub不可用，无法通知UI更新")

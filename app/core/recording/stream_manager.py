@@ -24,6 +24,10 @@ class LiveStreamRecorder:
     DEFAULT_SEGMENT_TIME = "1800"
     DEFAULT_SAVE_FORMAT = "mp4"
     DEFAULT_QUALITY = VideoQuality.OD
+    
+    # 全局页面刷新控制
+    _page_refresh_timer = None
+    _page_refresh_lock = asyncio.Lock()
 
     def __init__(self, app, recording, recording_info):
         self.app = app
@@ -107,29 +111,69 @@ class LiveStreamRecorder:
                     except Exception as e:
                         logger.warning(f"Failed to schedule notification: {e}")
                         
-                    # 强制刷新页面，确保UI更新
+                    # 智能页面刷新控制，避免重复刷新
                     try:
                         if (hasattr(self.app, 'current_page') and 
                             self.app.current_page and 
                             hasattr(self.app.current_page, 'recording_card_area')):
                             
-                            # 延迟检查并强制刷新
-                            def delayed_check():
+                            # 使用全局控制避免多个定时器同时运行
+                            def schedule_delayed_refresh():
                                 try:
-                                    # 检查卡片是否还在UI中
-                                    if self.recording.rec_id in self.app.record_card_manager.cards_obj:
-                                        logger.warning(f"Card still exists after removal, forcing page refresh: {record_name}")
-                                        self.app.page.run_task(self.app.current_page.load)
+                                    # 取消之前的定时器
+                                    if LiveStreamRecorder._page_refresh_timer:
+                                        LiveStreamRecorder._page_refresh_timer.cancel()
+                                        logger.debug("Cancelled previous page refresh timer")
+                                    
+                                    # 延迟检查并智能刷新
+                                    def delayed_check():
+                                        try:
+                                            # 检查是否真的需要刷新页面
+                                            needs_refresh = False
+                                            
+                                            # 检查是否有卡片移除失败
+                                            if hasattr(self.app, 'record_card_manager') and self.app.record_card_manager:
+                                                if self.recording.rec_id in self.app.record_card_manager.cards_obj:
+                                                    needs_refresh = True
+                                                    logger.debug(f"Card still exists after removal: {record_name}")
+                                            
+                                            # 避免强制刷新整个页面，改为智能UI更新
+                                            if needs_refresh:
+                                                logger.info(f"Performing smart UI update for: {record_name}")
+                                                try:
+                                                    # 只更新录制卡片区域，不刷新整个页面
+                                                    if (hasattr(self.app, 'current_page') and 
+                                                        self.app.current_page and 
+                                                        hasattr(self.app.current_page, 'recording_card_area')):
+                                                        self.app.current_page.recording_card_area.update()
+                                                        logger.debug(f"Smart UI update completed for: {record_name}")
+                                                    else:
+                                                        logger.debug(f"Recording card area not available for update: {record_name}")
+                                                except Exception as update_error:
+                                                    logger.debug(f"Smart UI update failed: {update_error}")
+                                            else:
+                                                logger.debug(f"No UI update needed for: {record_name}")
+                                                
+                                        except Exception as e:
+                                            logger.debug(f"Delayed refresh check failed: {e}")
+                                        finally:
+                                            # 清理定时器引用
+                                            LiveStreamRecorder._page_refresh_timer = None
+                                    
+                                    # 创建新的定时器（延迟1.5秒，给UI操作更多时间）
+                                    import threading
+                                    LiveStreamRecorder._page_refresh_timer = threading.Timer(1.5, delayed_check)
+                                    LiveStreamRecorder._page_refresh_timer.start()
+                                    logger.debug(f"Scheduled controlled page refresh check for: {record_name}")
+                                    
                                 except Exception as e:
-                                    logger.debug(f"Delayed check failed: {e}")
+                                    logger.debug(f"Failed to schedule controlled refresh: {e}")
                             
-                            # 1秒后检查
-                            import threading
-                            timer = threading.Timer(1.0, delayed_check)
-                            timer.start()
+                            # 执行调度
+                            schedule_delayed_refresh()
                             
                     except Exception as e:
-                        logger.debug(f"Failed to setup delayed refresh: {e}")
+                        logger.debug(f"Failed to setup controlled refresh: {e}")
                         
                     logger.debug(f"Completed UI operations for: {record_name}")
                 else:
