@@ -1053,13 +1053,34 @@ class LiveStreamRecorder:
                             break
                     else:
                         # 连接中断但没有关键异常，可能是网络问题或流暂时中断
-                        # 对于直播流，这种情况应该保持任务活跃，等待重连
-                        if self.direct_downloader.total_bytes > 0:
-                            logger.info(f"Direct download interrupted after downloading {self.direct_downloader.total_bytes} bytes. Keeping task active for potential reconnection: {record_name}")
+                        # 对于自定义流，检查用户配置是否需要自动删除中断的任务
+                        if self.platform_key == "custom":
+                            auto_remove_enabled = self.user_config.get("auto_remove_custom_stream_tasks", True)
+                            if auto_remove_enabled:
+                                if self.direct_downloader.total_bytes > 0:
+                                    logger.info(f"Custom stream interrupted after downloading {self.direct_downloader.total_bytes} bytes. Auto-removing task: {record_name}")
+                                    # 设置为完成状态，触发自动删除逻辑
+                                    download_completed_successfully = True
+                                else:
+                                    logger.info(f"Custom stream interrupted with no data received. Auto-removing task: {record_name}")
+                                    # 设置为失败状态，触发自动删除逻辑
+                                    download_failed = True
+                                break
+                            else:
+                                if self.direct_downloader.total_bytes > 0:
+                                    logger.info(f"Custom stream interrupted after downloading {self.direct_downloader.total_bytes} bytes. Keeping task active (auto-removal disabled): {record_name}")
+                                else:
+                                    logger.info(f"Custom stream interrupted with no data received. Keeping task active (auto-removal disabled): {record_name}")
+                                self.recording.status_info = RecordingStatus.MONITORING
+                                break
                         else:
-                            logger.info(f"Direct download interrupted with no data received. Keeping task active: {record_name}")
-                        self.recording.status_info = RecordingStatus.MONITORING
-                        break
+                            # 对于平台流，保持原有逻辑，等待重连
+                            if self.direct_downloader.total_bytes > 0:
+                                logger.info(f"Direct download interrupted after downloading {self.direct_downloader.total_bytes} bytes. Keeping task active for potential reconnection: {record_name}")
+                            else:
+                                logger.info(f"Direct download interrupted with no data received. Keeping task active: {record_name}")
+                            self.recording.status_info = RecordingStatus.MONITORING
+                            break
                     
                     break
 

@@ -1,5 +1,58 @@
 # StreamCap 开发历史记录
 
+## 2025-08-19 02:14:07 - 修复自定义流任务自动删除逻辑
+
+### 问题描述
+用户反馈自定义流任务在连接中断后没有按照配置自动删除，而是保持在监控状态。
+
+### 问题分析
+1. **逻辑缺陷**: 在`stream_manager.py`的`start_direct_download`方法中，当直播流连接中断时，代码直接设置为`MONITORING`状态，没有检查用户的`auto_remove_custom_stream_tasks`配置
+2. **处理不一致**: 只有在明确的成功完成或失败时才会触发自动删除逻辑，连接中断的情况被忽略
+3. **用户体验问题**: 用户配置了自动删除但任务仍然保留，造成困惑
+
+### 核心修复方案
+1. **增强中断处理逻辑**: 在连接中断时检查平台类型和用户配置
+2. **区分平台处理**: 自定义流和平台流采用不同的中断处理策略
+3. **智能状态转换**: 根据下载数据量和用户配置，将中断转换为相应的完成或失败状态
+
+### 技术实现细节
+
+#### 修改文件: `app/core/recording/stream_manager.py`
+- **位置**: 1055-1061行的连接中断处理逻辑
+- **核心改进**:
+  ```python
+  # 对于自定义流，检查用户配置是否需要自动删除中断的任务
+  if self.platform_key == "custom":
+      auto_remove_enabled = self.user_config.get("auto_remove_custom_stream_tasks", True)
+      if auto_remove_enabled:
+          if self.direct_downloader.total_bytes > 0:
+              # 有数据下载，设置为完成状态触发自动删除
+              download_completed_successfully = True
+          else:
+              # 无数据下载，设置为失败状态触发自动删除
+              download_failed = True
+      else:
+          # 用户禁用自动删除，保持监控状态
+          self.recording.status_info = RecordingStatus.MONITORING
+  else:
+      # 平台流保持原有重连逻辑
+      self.recording.status_info = RecordingStatus.MONITORING
+  ```
+
+### 技术优化亮点
+1. **智能状态判断**: 根据下载数据量决定是标记为完成还是失败
+2. **配置驱动**: 完全遵循用户的`auto_remove_custom_stream_tasks`配置
+3. **平台区分**: 自定义流和平台流采用不同策略，避免影响正常的重连机制
+4. **日志完善**: 提供详细的日志信息，便于用户了解任务处理状态
+
+### 测试建议
+1. **自动删除测试**: 确保`auto_remove_custom_stream_tasks=true`时任务被正确删除
+2. **保留任务测试**: 确保`auto_remove_custom_stream_tasks=false`时任务保持监控状态
+3. **平台流测试**: 确保平台流的重连机制不受影响
+4. **数据量测试**: 测试有数据和无数据下载时的不同处理逻辑
+
+---
+
 ## 2025-08-19 01:56:39 - 修复直播流任务完成条件判断逻辑
 
 ### 问题描述
