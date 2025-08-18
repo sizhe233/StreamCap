@@ -60,6 +60,9 @@ class RecordingCardManager:
             # 确保卡片被正确添加到页面，以便获得有效的UID
             card = card_data["card"]
             
+            # 设置卡片的数据标识，用于防止重复创建
+            card.data = rec_id
+            
             # 将卡片数据存储到管理器中
             self.cards_obj[rec_id] = card_data
             

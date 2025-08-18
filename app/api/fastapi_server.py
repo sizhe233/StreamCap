@@ -645,6 +645,10 @@ class FastAPIServer:
                                 
                                 # 检查页面连接状态，避免在页面断开时更新UI
                                 if self.app_manager.record_card_manager._is_page_connected():
+                                    # 设置卡片数据标识（如果还没有设置的话）
+                                    if not hasattr(card, 'data') or card.data is None:
+                                        card.data = recording.rec_id
+                                    
                                     recordings_page.recording_card_area.content.controls.append(card)
                                     
                                     # 使用安全的页面更新方式
@@ -687,13 +691,35 @@ class FastAPIServer:
                                 self.app_manager.current_page and 
                                 hasattr(self.app_manager.current_page, 'recording_card_area')):
                                 
-                                # 如果卡片还没有显示，强制刷新整个录制页面
+                                # 如果卡片还没有显示，检查是否需要重新创建
                                 if recording.rec_id not in self.app_manager.record_card_manager.cards_obj:
-                                    logger.warning(f"卡片未显示，强制刷新页面: {recording.streamer_name}")
+                                    logger.warning(f"卡片未显示，尝试重新创建: {recording.streamer_name}")
                                     try:
-                                        await self.app_manager.current_page.load()
-                                    except Exception as load_error:
-                                        logger.error(f"页面重新加载失败: {load_error}")
+                                        # 检查卡片是否已经在UI中存在但未在管理器中注册
+                                        page = self.app_manager.current_page
+                                        existing_cards = page.recording_card_area.content.controls if hasattr(page, 'recording_card_area') else []
+                                        
+                                        # 检查是否已有相同rec_id的卡片存在
+                                        card_exists = False
+                                        for existing_card in existing_cards:
+                                            if hasattr(existing_card, 'data') and existing_card.data == recording.rec_id:
+                                                card_exists = True
+                                                logger.debug(f"发现已存在的卡片，跳过重复创建: {recording.rec_id}")
+                                                break
+                                        
+                                        if not card_exists:
+                                            # 只有在确实不存在时才重新创建
+                                            new_card = await self.app_manager.record_card_manager.create_card(recording)
+                                            if new_card and self.app_manager.record_card_manager._is_page_connected():
+                                                # 设置卡片数据标识
+                                                new_card.data = recording.rec_id
+                                                page.recording_card_area.content.controls.append(new_card)
+                                                page.recording_card_area.update()
+                                                logger.info(f"延迟创建卡片成功: {recording.streamer_name}")
+                                            else:
+                                                logger.warning(f"延迟创建卡片失败: {recording.streamer_name}")
+                                    except Exception as create_error:
+                                        logger.error(f"延迟创建卡片失败: {create_error}")
                                 else:
                                     # 只是更新页面
                                     try:
