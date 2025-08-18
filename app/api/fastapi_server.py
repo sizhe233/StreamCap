@@ -637,15 +637,34 @@ class FastAPIServer:
                             try:
                                 logger.debug(f"创建新卡片: {recording.rec_id}")
                                 card = await self.app_manager.record_card_manager.create_card(recording)
-                                recordings_page.recording_card_area.content.controls.append(card)
-                                recordings_page.recording_card_area.update()
                                 
-                                # 更新过滤区域
-                                if hasattr(recordings_page, 'content_area') and len(recordings_page.content_area.controls) > 1:
-                                    recordings_page.content_area.controls[1] = recordings_page.create_filter_area()
-                                    recordings_page.content_area.update()
+                                # 检查卡片是否成功创建
+                                if card is None:
+                                    logger.warning(f"卡片创建失败，将通过延迟刷新处理: {recording.streamer_name}")
+                                    return recording.rec_id
+                                
+                                # 检查页面连接状态，避免在页面断开时更新UI
+                                if self.app_manager.record_card_manager._is_page_connected():
+                                    recordings_page.recording_card_area.content.controls.append(card)
                                     
-                                logger.info(f"成功直接添加录制卡片到当前页面: {recording.streamer_name}")
+                                    # 使用安全的页面更新方式
+                                    try:
+                                        recordings_page.recording_card_area.update()
+                                        
+                                        # 更新过滤区域
+                                        if hasattr(recordings_page, 'content_area') and len(recordings_page.content_area.controls) > 1:
+                                            recordings_page.content_area.controls[1] = recordings_page.create_filter_area()
+                                            recordings_page.content_area.update()
+                                            
+                                        logger.info(f"成功直接添加录制卡片到当前页面: {recording.streamer_name}")
+                                    except (Exception) as update_error:
+                                        logger.warning(f"页面更新失败，将通过延迟刷新处理: {update_error}")
+                                        # 从控件列表中移除已添加的卡片，避免重复
+                                        if card and card in recordings_page.recording_card_area.content.controls:
+                                            recordings_page.recording_card_area.content.controls.remove(card)
+                                else:
+                                    logger.warning(f"页面已断开连接，跳过直接UI更新: {recording.streamer_name}")
+                                    
                             except Exception as e:
                                 logger.error(f"直接添加录制卡片失败: {e}")
                                 import traceback
@@ -659,6 +678,11 @@ class FastAPIServer:
                     async def delayed_ui_refresh():
                         await asyncio.sleep(0.5)  # 等待500ms确保所有操作完成
                         try:
+                            # 检查页面连接状态
+                            if not self.app_manager.record_card_manager._is_page_connected():
+                                logger.debug("页面已断开连接，跳过延迟刷新")
+                                return
+                                
                             if (hasattr(self.app_manager, 'current_page') and 
                                 self.app_manager.current_page and 
                                 hasattr(self.app_manager.current_page, 'recording_card_area')):
@@ -666,13 +690,22 @@ class FastAPIServer:
                                 # 如果卡片还没有显示，强制刷新整个录制页面
                                 if recording.rec_id not in self.app_manager.record_card_manager.cards_obj:
                                     logger.warning(f"卡片未显示，强制刷新页面: {recording.streamer_name}")
-                                    await self.app_manager.current_page.load()
+                                    try:
+                                        await self.app_manager.current_page.load()
+                                    except Exception as load_error:
+                                        logger.error(f"页面重新加载失败: {load_error}")
                                 else:
                                     # 只是更新页面
-                                    self.app_manager.page.update()
-                                    logger.debug("延迟页面更新完成")
+                                    try:
+                                        if self.app_manager.record_card_manager._is_page_connected():
+                                            self.app_manager.page.update()
+                                            logger.debug("延迟页面更新完成")
+                                        else:
+                                            logger.debug("页面在更新前断开连接")
+                                    except (Exception) as update_error:
+                                        logger.warning(f"延迟页面更新失败: {update_error}")
                         except Exception as e:
-                            logger.warning(f"延迟页面更新失败: {e}")
+                            logger.warning(f"延迟页面更新过程失败: {e}")
                     
                     # 创建延迟刷新任务
                     asyncio.create_task(delayed_ui_refresh())

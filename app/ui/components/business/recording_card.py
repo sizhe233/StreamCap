@@ -37,15 +37,43 @@ class RecordingCardManager:
     async def create_card(self, recording: Recording):
         """Create a card for a given recording."""
         rec_id = recording.rec_id
+        
+        # 检查页面连接状态
+        if not self._is_page_connected():
+            logger.warning(f"Page disconnected, cannot create card for: {rec_id}")
+            return None
+            
         if not self.cards_obj.get(rec_id):
             if self.app.recording_enabled:
                 self.app.page.run_task(self.app.record_manager.check_if_live, recording)
             else:
                 recording.status_info = RecordingStatus.NOT_RECORDING_SPACE
-        card_data = self._create_card_components(recording)
-        self.cards_obj[rec_id] = card_data
-        self.start_update_task(recording)
-        return card_data["card"]
+                
+        try:
+            card_data = self._create_card_components(recording)
+            
+            # 验证卡片组件是否正确创建
+            if not card_data or not card_data.get("card"):
+                logger.error(f"Failed to create card components for: {rec_id}")
+                return None
+                
+            # 确保卡片被正确添加到页面，以便获得有效的UID
+            card = card_data["card"]
+            
+            # 将卡片数据存储到管理器中
+            self.cards_obj[rec_id] = card_data
+            
+            # 启动更新任务
+            self.start_update_task(recording)
+            
+            logger.debug(f"Successfully created card for: {rec_id}")
+            return card
+            
+        except Exception as e:
+            logger.error(f"Error creating card for {rec_id}: {e}")
+            import traceback
+            logger.error(f"Traceback: {traceback.format_exc()}")
+            return None
 
     def _create_card_components(self, recording: Recording):
         """create card components."""
@@ -204,6 +232,11 @@ class RecordingCardManager:
             
         try:
             recording_card = self.cards_obj[recording.rec_id]
+            
+            # Check if card object is valid
+            if not recording_card or not recording_card.get("card"):
+                logger.warning(f"Invalid card object for recording: {recording.rec_id}")
+                return
 
             # Update display title
             display_title = RecordingCardState.get_display_title(recording, self._)
@@ -211,23 +244,26 @@ class RecordingCardManager:
                 recording_card["display_title_label"].value = display_title
                 recording_card["display_title_label"].weight = RecordingCardState.get_title_weight(recording)
 
-            # Update status label
+            # Update status label with enhanced error handling
             new_status_label = self.create_status_label(recording)
             if recording_card["card"] and recording_card["card"].content and recording_card["card"].content.content:
-                title_row = recording_card["card"].content.content.controls[0]
-                title_row.alignment = ft.MainAxisAlignment.START
-                title_row.spacing = 5
-                title_row.tight = True
+                try:
+                    title_row = recording_card["card"].content.content.controls[0]
+                    title_row.alignment = ft.MainAxisAlignment.START
+                    title_row.spacing = 5
+                    title_row.tight = True
 
-                # Update the status label if it exists
-                if new_status_label:
-                    if len(title_row.controls) > 1:
-                        title_row.controls[1] = new_status_label
+                    # Update the status label if it exists
+                    if new_status_label:
+                        if len(title_row.controls) > 1:
+                            title_row.controls[1] = new_status_label
+                        else:
+                            title_row.controls.append(new_status_label)
                     else:
-                        title_row.controls.append(new_status_label)
-                else:
-                    if len(title_row.controls) > 1:
-                        title_row.controls.pop()
+                        if len(title_row.controls) > 1:
+                            title_row.controls.pop()
+                except (IndexError, AttributeError) as e:
+                    logger.warning(f"Failed to update status label for card {recording.rec_id}: {e}")
 
             # Update duration and speed
             if recording_card.get("duration_label"):
@@ -250,15 +286,24 @@ class RecordingCardManager:
                 recording_card["card"].content.bgcolor = self.get_card_background_color(recording)
                 recording_card["card"].content.border = ft.border.all(2, self.get_card_border_color(recording))
                 
-                # Final page update with connection check
+                # Final page update with enhanced error handling
                 if self._is_page_connected():
                     try:
+                        # Check if control UID is valid
+                        card = recording_card["card"]
+                        if hasattr(card, '_Control__uid') and card._Control__uid is None:
+                            logger.warning(f"Card UID is None for {recording.rec_id}, skipping update")
+                            return
+                            
                         self.app.page.update()
                         # 只在录制状态变化时记录日志，避免频繁输出
                         # if recording.is_recording or recording.status_info in [RecordingStatus.RECORDING_ERROR, RecordingStatus.RECORDING]:
                             # logger.debug(f"Updated card for: {recording.rec_id} - Status: {recording.status_info}")
                     except (ft.core.page.PageDisconnectedException, AssertionError) as e:
                         logger.debug(f"Page disconnected during update: {e}")
+                        return
+                    except Exception as e:
+                        logger.warning(f"Unexpected error during page update for {recording.rec_id}: {e}")
                         return
                 else:
                     logger.debug(f"Page disconnected before final update for: {recording.rec_id}")
