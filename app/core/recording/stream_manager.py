@@ -25,8 +25,7 @@ class LiveStreamRecorder:
     DEFAULT_SAVE_FORMAT = "mp4"
     DEFAULT_QUALITY = VideoQuality.OD
     
-    # 全局页面刷新控制
-    _page_refresh_timer = None
+    # 全局页面刷新控制锁（保留类级别的锁用于同步）
     _page_refresh_lock = asyncio.Lock()
 
     def __init__(self, app, recording, recording_info):
@@ -50,6 +49,8 @@ class LiveStreamRecorder:
         self.save_format = self._get_info("save_format", default=self.DEFAULT_SAVE_FORMAT).lower()
         self.proxy = self.is_use_proxy()
         self.direct_downloader = None
+        # 实例级别的页面刷新定时器，避免多个录制任务之间的冲突
+        self._instance_refresh_timer = None
         os.makedirs(self.output_dir, exist_ok=True)
         self.app.language_manager.add_observer(self)
         self._ = {}
@@ -59,6 +60,23 @@ class LiveStreamRecorder:
         language = self.app.language_manager.language
         for key in ("recording_manager", "stream_manager"):
             self._.update(language.get(key, {}))
+    
+    def cleanup(self):
+        """清理资源，包括取消定时器"""
+        try:
+            if self._instance_refresh_timer:
+                self._instance_refresh_timer.cancel()
+                self._instance_refresh_timer = None
+                logger.debug(f"Cleaned up refresh timer for: {self.recording.streamer_name}")
+        except Exception as e:
+            logger.debug(f"Failed to cleanup refresh timer: {e}")
+    
+    def __del__(self):
+        """析构函数，确保资源清理"""
+        try:
+            self.cleanup()
+        except Exception:
+            pass  # 忽略析构时的异常
 
     def safe_remove_recording_sync(self, record_name: str, error_message: str = "录制失败已从任务列表中移除", duration: int = 3000):
         """
@@ -117,13 +135,13 @@ class LiveStreamRecorder:
                             self.app.current_page and 
                             hasattr(self.app.current_page, 'recording_card_area')):
                             
-                            # 使用全局控制避免多个定时器同时运行
+                            # 使用实例级别的定时器避免多个录制任务之间的冲突
                             def schedule_delayed_refresh():
                                 try:
-                                    # 取消之前的定时器
-                                    if LiveStreamRecorder._page_refresh_timer:
-                                        LiveStreamRecorder._page_refresh_timer.cancel()
-                                        logger.debug("Cancelled previous page refresh timer")
+                                    # 取消当前实例之前的定时器
+                                    if self._instance_refresh_timer:
+                                        self._instance_refresh_timer.cancel()
+                                        logger.debug(f"Cancelled previous refresh timer for: {record_name}")
                                     
                                     # 延迟检查并智能刷新
                                     def delayed_check():
@@ -157,13 +175,13 @@ class LiveStreamRecorder:
                                         except Exception as e:
                                             logger.debug(f"Delayed refresh check failed: {e}")
                                         finally:
-                                            # 清理定时器引用
-                                            LiveStreamRecorder._page_refresh_timer = None
+                                            # 清理当前实例的定时器引用
+                                            self._instance_refresh_timer = None
                                     
                                     # 创建新的定时器（延迟1.5秒，给UI操作更多时间）
                                     import threading
-                                    LiveStreamRecorder._page_refresh_timer = threading.Timer(1.5, delayed_check)
-                                    LiveStreamRecorder._page_refresh_timer.start()
+                                    self._instance_refresh_timer = threading.Timer(1.5, delayed_check)
+                                    self._instance_refresh_timer.start()
                                     logger.debug(f"Scheduled controlled page refresh check for: {record_name}")
                                     
                                 except Exception as e:
