@@ -57,9 +57,13 @@ class DirectStreamDownloader:
                 async with client.stream("GET", self.record_url) as response:
                     if response.status_code not in [200, 206]:  # 200: OK, 206: Partial Content
                         if response.status_code == 404:
-                            logger.error(f"直播流不存在或已结束, Status Code: {response.status_code}")
+                            logger.error(f"直播流不存在或已结束, URL: {self.record_url}, Status Code: {response.status_code}")
+                        elif response.status_code == 403:
+                            logger.error(f"直播流访问被拒绝, URL: {self.record_url}, Status Code: {response.status_code}")
+                        elif response.status_code >= 500:
+                            logger.error(f"服务器错误, URL: {self.record_url}, Status Code: {response.status_code}")
                         else:
-                            logger.error(f"Request Stream Failed, Status Code: {response.status_code}")
+                            logger.error(f"请求流失败, URL: {self.record_url}, Status Code: {response.status_code}")
                         return
 
                     with open(self.save_path, 'wb') as f:

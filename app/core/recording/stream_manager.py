@@ -702,9 +702,19 @@ class LiveStreamRecorder:
             logger.error(f"An error occurred during the subprocess execution: {e}")
             self.recording.status_info = RecordingStatus.RECORDING_ERROR
 
-            # Check if this is a critical error that should remove the task
+            # 检查是否为需要移除任务的关键错误
             error_message = str(e).lower()
-            is_critical_error = any(error in error_message for error in ['404', 'not found', 'connection refused', 'no route to host'])
+            # 扩展关键错误检测，但更加保守
+            critical_errors = [
+                '404', 'not found', 'connection refused', 'no route to host',
+                'stream not found', 'invalid url', 'forbidden', 'unauthorized',
+                'stream offline permanently', 'account suspended'
+            ]
+            is_critical_error = any(error in error_message for error in critical_errors)
+            
+            # 记录详细的错误信息用于调试
+            logger.error(f"Recording error for {record_name}: {error_message}")
+            logger.info(f"Critical error check result: {is_critical_error}")
 
             try:
                 self.app.record_manager.stop_recording(self.recording)
@@ -1000,12 +1010,36 @@ class LiveStreamRecorder:
                 await asyncio.sleep(1)
 
                 if self.direct_downloader.download_task and self.direct_downloader.download_task.done():
-                    # Check if download completed successfully by checking if any data was downloaded
+                    # 获取下载任务的异常信息
+                    task_exception = None
+                    try:
+                        task_exception = self.direct_downloader.download_task.exception()
+                    except Exception:
+                        pass
+                    
+                    # 检查下载是否成功完成
                     if self.direct_downloader.total_bytes > 0:
                         download_completed_successfully = True
+                        logger.info(f"Direct download completed successfully: {record_name}, bytes: {self.direct_downloader.total_bytes}")
+                    elif task_exception is not None:
+                        # 有异常发生，检查是否为关键错误
+                        error_msg = str(task_exception).lower()
+                        is_critical_error = any(error in error_msg for error in ['404', 'not found', 'connection refused', 'no route to host', 'stream failed'])
+                        
+                        if is_critical_error:
+                            logger.warning(f"Critical download error detected: {task_exception}")
+                            download_failed = True
+                        else:
+                            # 非关键错误，可能是临时网络问题，不自动移除任务
+                            logger.warning(f"Non-critical download error, keeping task active: {task_exception}")
+                            self.recording.status_info = RecordingStatus.MONITORING
+                            break
                     else:
-                        # Check if download failed (no data downloaded and task is done)
-                        download_failed = True
+                        # 没有异常但也没有数据，可能是流暂时不可用，不自动移除
+                        logger.info(f"Download completed with no data, but no critical error detected. Keeping task active: {record_name}")
+                        self.recording.status_info = RecordingStatus.MONITORING
+                        break
+                    
                     break
 
             # Handle different completion scenarios
@@ -1113,9 +1147,19 @@ class LiveStreamRecorder:
             self.recording.status_info = RecordingStatus.RECORDING_ERROR
             self.recording.is_recording = False
 
-            # Check if this is a critical error that should remove the task
+            # 检查是否为需要移除任务的关键错误
             error_message = str(e).lower()
-            is_critical_error = any(error in error_message for error in ['404', 'not found', 'connection refused', 'no route to host'])
+            # 使用与FFmpeg相同的关键错误检测逻辑
+            critical_errors = [
+                '404', 'not found', 'connection refused', 'no route to host',
+                'stream not found', 'invalid url', 'forbidden', 'unauthorized',
+                'stream offline permanently', 'account suspended'
+            ]
+            is_critical_error = any(error in error_message for error in critical_errors)
+            
+            # 记录详细的错误信息用于调试
+            logger.error(f"Direct download error for {record_name}: {error_message}")
+            logger.info(f"Critical error check result: {is_critical_error}")
 
             try:
                 self.app.record_manager.stop_recording(self.recording)
