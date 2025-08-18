@@ -1,5 +1,61 @@
 # StreamCap 开发历史
 
+## 2025-08-19 02:58:16 - 修复自定义流任务自动删除逻辑错误
+
+### 问题描述
+用户反馈修改完重试机制后，自定义流任务又不自动删除了。从日志分析发现，直播流正常完成下载时显示"Download Completed"和"Retrying (0/3)"，说明DirectStreamDownloader正常结束，current_retry保持为0。
+
+### 问题分析
+1. **逻辑判断错误**：之前的修复中，只有当`current_retry > max_retries`时才触发删除，但正常完成的下载current_retry为0
+2. **场景理解偏差**：DirectStreamDownloader正常完成下载时不会进入异常处理分支，current_retry不会递增
+3. **删除条件过严**：只考虑了重试失败的情况，忽略了正常完成下载的情况
+
+### 核心修复方案
+
+#### 1. 简化删除逻辑
+- 移除复杂的重试次数判断
+- 对于自定义流，直接根据`auto_remove_custom_stream_tasks`配置决定是否删除
+- 无论是正常完成还是中断，都应用相同的删除逻辑
+
+#### 2. 统一处理策略
+- **自定义流 + 启用自动删除**：根据下载数据量设置完成/失败状态，触发删除
+- **自定义流 + 禁用自动删除**：保持MONITORING状态，不删除任务
+- **平台流**：始终保持MONITORING状态，等待重连
+
+### 技术实现细节
+
+修改`stream_manager.py`文件第1053-1083行：
+```python
+else:
+    # 连接正常结束或中断但没有关键异常
+    # 对于自定义流，检查用户配置是否需要自动删除
+    if self.platform_key == "custom":
+        auto_remove_enabled = self.user_config.get("auto_remove_custom_stream_tasks", True)
+        if auto_remove_enabled:
+            # 根据下载数据量设置相应状态，触发删除
+        else:
+            # 保持MONITORING状态，不删除
+    else:
+        # 平台流保持MONITORING状态，等待重连
+```
+
+### 技术优化亮点
+
+1. **逻辑简化**：移除复杂的重试次数判断，直接基于配置决策
+2. **场景全覆盖**：同时处理正常完成和异常中断的情况
+3. **配置驱动**：完全遵循用户的auto_remove_custom_stream_tasks配置
+4. **平台差异化**：自定义流和平台流采用不同处理策略
+5. **日志优化**：使用更准确的描述"completed/interrupted"
+
+### 修改文件
+- `stream_manager.py`：修复自动删除逻辑
+
+### 测试建议
+1. 测试自定义流正常完成下载后的自动删除行为
+2. 测试自定义流中断后的自动删除行为
+3. 验证auto_remove_custom_stream_tasks配置的影响
+4. 确认平台流在任何情况下都保持活跃状态
+
 ## 2025-08-19 02:19:16 - 完善直播流重试机制和任务删除逻辑
 
 ### 问题描述

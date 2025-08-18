@@ -1052,52 +1052,33 @@ class LiveStreamRecorder:
                             self.recording.status_info = RecordingStatus.MONITORING
                             break
                     else:
-                        # 连接中断但没有关键异常，可能是网络问题或流暂时中断
-                        # 检查是否已达到最大重试次数
-                        max_retries_reached = self.direct_downloader.current_retry > self.direct_downloader.max_retries
-                        
+                        # 连接正常结束或中断但没有关键异常
+                        # 对于自定义流，检查用户配置是否需要自动删除
                         if self.platform_key == "custom":
                             auto_remove_enabled = self.user_config.get("auto_remove_custom_stream_tasks", True)
-                            
-                            if max_retries_reached and auto_remove_enabled:
-                                # 达到最大重试次数且启用自动删除
+                            if auto_remove_enabled:
                                 if self.direct_downloader.total_bytes > 0:
-                                    logger.info(f"Custom stream failed after {self.direct_downloader.max_retries} retries with {self.direct_downloader.total_bytes} bytes downloaded. Auto-removing task: {record_name}")
+                                    logger.info(f"Custom stream completed/interrupted after downloading {self.direct_downloader.total_bytes} bytes. Auto-removing task: {record_name}")
                                     # 设置为完成状态，触发自动删除逻辑
                                     download_completed_successfully = True
                                 else:
-                                    logger.info(f"Custom stream failed after {self.direct_downloader.max_retries} retries with no data received. Auto-removing task: {record_name}")
+                                    logger.info(f"Custom stream completed/interrupted with no data received. Auto-removing task: {record_name}")
                                     # 设置为失败状态，触发自动删除逻辑
                                     download_failed = True
                                 break
-                            elif max_retries_reached and not auto_remove_enabled:
-                                # 达到最大重试次数但禁用自动删除
-                                if self.direct_downloader.total_bytes > 0:
-                                    logger.info(f"Custom stream failed after {self.direct_downloader.max_retries} retries with {self.direct_downloader.total_bytes} bytes downloaded. Keeping task active (auto-removal disabled): {record_name}")
-                                else:
-                                    logger.info(f"Custom stream failed after {self.direct_downloader.max_retries} retries with no data received. Keeping task active (auto-removal disabled): {record_name}")
-                                self.recording.status_info = RecordingStatus.MONITORING
-                                break
                             else:
-                                # 未达到最大重试次数，继续重连
                                 if self.direct_downloader.total_bytes > 0:
-                                    logger.info(f"Custom stream interrupted after downloading {self.direct_downloader.total_bytes} bytes. Retrying ({self.direct_downloader.current_retry}/{self.direct_downloader.max_retries}): {record_name}")
+                                    logger.info(f"Custom stream completed/interrupted after downloading {self.direct_downloader.total_bytes} bytes. Keeping task active (auto-removal disabled): {record_name}")
                                 else:
-                                    logger.info(f"Custom stream interrupted with no data received. Retrying ({self.direct_downloader.current_retry}/{self.direct_downloader.max_retries}): {record_name}")
+                                    logger.info(f"Custom stream completed/interrupted with no data received. Keeping task active (auto-removal disabled): {record_name}")
                                 self.recording.status_info = RecordingStatus.MONITORING
                                 break
                         else:
                             # 对于平台流，保持原有逻辑，等待重连
-                            if max_retries_reached:
-                                if self.direct_downloader.total_bytes > 0:
-                                    logger.warning(f"Platform stream failed after {self.direct_downloader.max_retries} retries with {self.direct_downloader.total_bytes} bytes downloaded. Keeping task active: {record_name}")
-                                else:
-                                    logger.warning(f"Platform stream failed after {self.direct_downloader.max_retries} retries with no data received. Keeping task active: {record_name}")
+                            if self.direct_downloader.total_bytes > 0:
+                                logger.info(f"Platform stream completed/interrupted after downloading {self.direct_downloader.total_bytes} bytes. Keeping task active for potential reconnection: {record_name}")
                             else:
-                                if self.direct_downloader.total_bytes > 0:
-                                    logger.info(f"Platform stream interrupted after downloading {self.direct_downloader.total_bytes} bytes. Retrying ({self.direct_downloader.current_retry}/{self.direct_downloader.max_retries}): {record_name}")
-                                else:
-                                    logger.info(f"Platform stream interrupted with no data received. Retrying ({self.direct_downloader.current_retry}/{self.direct_downloader.max_retries}): {record_name}")
+                                logger.info(f"Platform stream completed/interrupted with no data received. Keeping task active: {record_name}")
                             self.recording.status_info = RecordingStatus.MONITORING
                             break
                     
