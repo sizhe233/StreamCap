@@ -1,8 +1,8 @@
 {
     "language": "Chinese",
-    "live_save_path": "",
+    "live_save_path": "D:\\录制中\\微信",
     "filename_includes_title": false,
-    "remove_emojis": false,
+    "remove_emojis": true,
     "folder_name_platform": true,
     "folder_name_author": true,
     "folder_name_time": false,
@@ -12,7 +12,6 @@
     "video_format": "TS",
     "record_quality": "OD",
     "loop_time_seconds": "180",
-    "startup_check_interval": "3",
     "segmented_recording_enabled": true,
     "force_https_recording": true,
     "default_live_source": "FLV",
