@@ -616,15 +616,11 @@ class FastAPIServer:
                 if hasattr(self.app_manager, 'page') and self.app_manager.page and hasattr(self.app_manager.page, 'pubsub'):
                     logger.debug(f"页面和pubsub可用，准备发送通知")
                     
-                    # 通过pubsub通知UI更新，这会触发subscribe_add_cards方法
-                    self.app_manager.page.pubsub.send_others_on_topic("add", recording)
-                    logger.info(f"已通过pubsub发送'add'通知: {recording.streamer_name}")
-                    
                     # 检查当前页面信息
                     current_page_name = getattr(self.app_manager.current_page, 'page_name', 'Unknown') if self.app_manager.current_page else 'None'
                     logger.debug(f"当前页面: {current_page_name}")
                     
-                    # 如果当前页面是录制页面，直接更新UI
+                    # 如果当前页面是录制页面，直接更新UI，否则通过pubsub通知
                     if (hasattr(self.app_manager, 'current_page') and 
                         self.app_manager.current_page and 
                         hasattr(self.app_manager.current_page, 'recording_card_area')):
@@ -648,6 +644,11 @@ class FastAPIServer:
                                     # 设置卡片数据标识（如果还没有设置的话）
                                     if not hasattr(card, 'data') or card.data is None:
                                         card.data = recording.rec_id
+                                    
+                                    # 设置计划时间范围
+                                    recording.scheduled_time_range = await self.app_manager.record_manager.get_scheduled_time_range(
+                                        recording.scheduled_start_time, recording.monitor_hours
+                                    )
                                     
                                     recordings_page.recording_card_area.content.controls.append(card)
                                     
@@ -676,7 +677,10 @@ class FastAPIServer:
                         else:
                             logger.debug(f"卡片已存在: {recording.rec_id}")
                     else:
-                        logger.info(f"当前页面不是录制页面 (页面: {current_page_name})，仅发送pubsub通知")
+                        logger.info(f"当前页面不是录制页面 (页面: {current_page_name})，发送pubsub通知")
+                        # 只有在不是录制页面时才通过pubsub通知，避免重复添加
+                        self.app_manager.page.pubsub.send_others_on_topic("add", recording)
+                        logger.info(f"已通过pubsub发送'add'通知: {recording.streamer_name}")
                         
                     # 延迟强制刷新UI，确保所有操作完成
                     async def delayed_ui_refresh():
