@@ -1,4 +1,71 @@
-# StreamCap 开发历史记录
+# StreamCap 开发历史
+
+## 2025-08-19 02:19:16 - 完善直播流重试机制和任务删除逻辑
+
+### 问题描述
+用户反馈直播流任务应该在重试5次后被删除，但当前逻辑在连接中断时立即触发删除判断，没有考虑重试次数。
+
+### 问题分析
+1. **重试逻辑不完整**：stream_manager.py中的逻辑没有检查DirectStreamDownloader的重试状态
+2. **删除时机错误**：在第一次连接中断时就触发删除逻辑，而不是等待重试完成
+3. **状态显示不准确**：没有显示当前重试进度，用户无法了解重试状态
+
+### 核心修复方案
+
+#### 1. 增强重试状态检查
+- 在stream_manager.py中添加`max_retries_reached`检查
+- 通过`self.direct_downloader.current_retry > self.direct_downloader.max_retries`判断是否达到最大重试次数
+
+#### 2. 完善自定义流处理逻辑
+- **达到最大重试次数且启用自动删除**：根据下载数据量设置相应的完成/失败状态
+- **达到最大重试次数但禁用自动删除**：保持MONITORING状态，不删除任务
+- **未达到最大重试次数**：继续重连，显示重试进度
+
+#### 3. 优化平台流处理
+- 达到最大重试次数时使用warning级别日志
+- 未达到时显示重试进度信息
+- 始终保持MONITORING状态（平台流不自动删除）
+
+### 技术实现细节
+
+修改`stream_manager.py`文件第1055-1085行：
+```python
+# 检查是否已达到最大重试次数
+max_retries_reached = self.direct_downloader.current_retry > self.direct_downloader.max_retries
+
+if self.platform_key == "custom":
+    auto_remove_enabled = self.user_config.get("auto_remove_custom_stream_tasks", True)
+    
+    if max_retries_reached and auto_remove_enabled:
+        # 达到最大重试次数且启用自动删除
+        # 根据下载数据量设置完成/失败状态
+    elif max_retries_reached and not auto_remove_enabled:
+        # 达到最大重试次数但禁用自动删除
+        # 保持MONITORING状态
+    else:
+        # 未达到最大重试次数，继续重连
+        # 显示重试进度
+else:
+    # 平台流处理逻辑
+    # 显示重试状态和进度
+```
+
+### 技术优化亮点
+
+1. **智能重试管理**：只有在达到最大重试次数后才触发删除逻辑
+2. **详细进度显示**：日志中显示当前重试次数和总重试次数
+3. **分级日志记录**：达到最大重试次数时使用warning级别
+4. **配置驱动处理**：完全遵循用户的auto_remove_custom_stream_tasks配置
+5. **平台差异化**：自定义流和平台流采用不同的处理策略
+
+### 修改文件
+- `stream_manager.py`：完善重试机制和删除逻辑
+
+### 测试建议
+1. 测试自定义流在重试5次后的自动删除行为
+2. 验证重试过程中的日志输出和进度显示
+3. 测试auto_remove_custom_stream_tasks配置的影响
+4. 确认平台流在达到最大重试次数后仍保持活跃状态
 
 ## 2025-08-19 02:14:07 - 修复自定义流任务自动删除逻辑
 
