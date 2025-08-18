@@ -472,12 +472,18 @@ class LiveStreamRecorder:
                 except Exception as e:
                     logger.debug(f"Failed to update speed in UI: {e}")
 
+            # 从用户配置获取重连参数
+            max_retries = self.user_config.get("direct_download_max_retries", 3)
+            retry_delay = self.user_config.get("direct_download_retry_delay", 5)
+            
             self.direct_downloader = DirectStreamDownloader(
                 record_url=record_url,
                 save_path=save_path,
                 headers=headers,
                 proxy=self.proxy,
-                speed_callback=speed_update_callback
+                speed_callback=speed_update_callback,
+                max_retries=max_retries,
+                retry_delay=retry_delay
             )
 
             self.app.page.run_task(
@@ -1007,6 +1013,16 @@ class LiveStreamRecorder:
                     await self.direct_downloader.stop_download()
                     break
 
+                # 检查是否正在重连
+                if hasattr(self.direct_downloader, 'is_reconnecting') and self.direct_downloader.is_reconnecting:
+                    if self.recording.status_info != RecordingStatus.MONITORING:
+                        self.recording.status_info = RecordingStatus.MONITORING
+                        logger.info(f"Direct download reconnecting: {record_name}")
+                elif self.recording.status_info == RecordingStatus.MONITORING and not self.direct_downloader.is_reconnecting:
+                    # 重连成功，恢复录制状态
+                    self.recording.status_info = RecordingStatus.RECORDING
+                    logger.info(f"Direct download reconnected successfully: {record_name}")
+
                 await asyncio.sleep(1)
 
                 if self.direct_downloader.download_task and self.direct_downloader.download_task.done():
@@ -1017,10 +1033,11 @@ class LiveStreamRecorder:
                     except Exception:
                         pass
                     
-                    # 检查下载是否成功完成
-                    if self.direct_downloader.total_bytes > 0:
+                    # 对于直播流，download_task.done()通常意味着连接中断，而不是正常完成
+                    # 只有在手动停止的情况下才算正常完成
+                    if self.direct_downloader.stop_event.is_set() and self.direct_downloader.total_bytes > 0:
                         download_completed_successfully = True
-                        logger.info(f"Direct download completed successfully: {record_name}, bytes: {self.direct_downloader.total_bytes}")
+                        logger.info(f"Direct download completed successfully (manually stopped): {record_name}, bytes: {self.direct_downloader.total_bytes}")
                     elif task_exception is not None:
                         # 有异常发生，检查是否为关键错误
                         error_msg = str(task_exception).lower()
@@ -1035,8 +1052,12 @@ class LiveStreamRecorder:
                             self.recording.status_info = RecordingStatus.MONITORING
                             break
                     else:
-                        # 没有异常但也没有数据，可能是流暂时不可用，不自动移除
-                        logger.info(f"Download completed with no data, but no critical error detected. Keeping task active: {record_name}")
+                        # 连接中断但没有关键异常，可能是网络问题或流暂时中断
+                        # 对于直播流，这种情况应该保持任务活跃，等待重连
+                        if self.direct_downloader.total_bytes > 0:
+                            logger.info(f"Direct download interrupted after downloading {self.direct_downloader.total_bytes} bytes. Keeping task active for potential reconnection: {record_name}")
+                        else:
+                            logger.info(f"Direct download interrupted with no data received. Keeping task active: {record_name}")
                         self.recording.status_info = RecordingStatus.MONITORING
                         break
                     
