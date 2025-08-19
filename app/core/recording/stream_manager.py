@@ -1155,7 +1155,7 @@ class LiveStreamRecorder:
 
             try:
                 self.recording.update({"display_title": display_title})
-                await self.app.record_card_manager.update_card(self.recording)
+                # 只通过pubsub机制更新UI，避免双重更新和绕过频率限制
                 self.app.page.pubsub.send_others_on_topic("update", self.recording)
                 if not self.app.recording_enabled:
                     self.recording.status_info = RecordingStatus.NOT_RECORDING_SPACE

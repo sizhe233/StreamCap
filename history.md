@@ -1,5 +1,63 @@
 # StreamCap 开发历史
 
+## 2025-08-20 00:07:01 - 进一步修复双重UI更新问题
+
+### 问题描述
+- 用户反馈频率限制机制实施后，仍然出现"Card UID is None"的debug日志
+- 继续出现socket.send()异常，表明UI更新频率问题未完全解决
+
+### 问题分析
+- 通过代码分析发现，虽然实现了频率限制机制，但仍有多处代码直接调用`update_card`方法
+- 这些直接调用绕过了频率限制机制，导致双重更新问题依然存在
+- 主要问题点：
+  1. `stream_manager.py`中直接调用`update_card`后又发送pubsub消息
+  2. `recording_card.py`中多个方法存在相同的双重更新模式
+
+### 修复方案
+1. **统一UI更新机制**：移除所有直接调用`update_card`的代码，统一使用pubsub机制
+2. **修复双重更新**：
+   - 修改`stream_manager.py`第1158行，移除直接调用`update_card`
+   - 修改`recording_card.py`中的`update_monitor_state`、`edit_recording_callback`、`on_toggle_recording`方法
+   - 确保所有UI更新都通过pubsub机制，从而应用频率限制
+
+### 技术细节
+- 移除了4处直接调用`update_card`的代码
+- 保持了pubsub机制的完整性
+- 确保所有UI更新都经过频率限制检查
+- 添加了详细的注释说明修改原因
+
+### 预期效果
+- 彻底消除双重UI更新问题
+- 所有UI更新都受频率限制保护
+- 减少"Card UID is None"警告和socket异常
+- 提升UI响应性能和稳定性
+
+## 2025-08-19 23:18:52 - 修复频繁UI更新导致的UID警告和页面卡顿问题
+
+### 问题描述
+- 用户反馈在空闲时出现大量"Card UID is None"警告
+- 页面出现卡顿现象，最终需要Ctrl+C强制结束
+- 日志显示OSError: Signal 2 ignored due to race condition错误
+
+### 问题分析
+- 通过分析代码发现，stream_manager.py中在更新UI后立即发送pubsub消息，导致双重更新
+- pubsub机制导致update_card方法被频繁调用
+- 当Flet控件UID为None时产生大量警告，可能是页面连接不稳定或控件创建问题
+
+### 修复方案
+1. **降低警告级别**：将"Card UID is None"的日志级别从warning降为debug
+2. **增加存在性检查**：在update_card中增加对卡片是否仍存在于页面中的检查
+3. **实现频率限制**：在RecordingCardManager中添加更新频率限制机制
+   - 添加last_update_time字典记录每个录制任务的最后更新时间
+   - 在subscribe_update_card中实现500ms的更新间隔限制
+   - 在remove_recording_card中清理更新时间记录，避免内存泄漏
+4. **优化更新逻辑**：避免在页面断开或卡片不存在时进行无效的UI更新
+
+### 技术细节
+- 修改了recording_card.py中的update_card、subscribe_update_card和remove_recording_card方法
+- 实现了基于时间戳的频率限制机制，防止同一录制任务在短时间内被重复更新
+- 增强了页面连接状态和卡片存在性的检查逻辑
+
 ## 2025-08-19 02:58:16 - 修复自定义流任务自动删除逻辑错误
 
 ### 问题描述

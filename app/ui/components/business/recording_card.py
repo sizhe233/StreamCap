@@ -20,6 +20,7 @@ class RecordingCardManager:
         self.cards_obj = {}
         self.update_duration_tasks = {}
         self.selected_cards = {}
+        self.last_update_time = {}  # 记录每个录制任务的最后更新时间
         self.app.language_manager.add_observer(self)
         self._ = {}
         self.load()
@@ -295,7 +296,13 @@ class RecordingCardManager:
                         # Check if control UID is valid
                         card = recording_card["card"]
                         if hasattr(card, '_Control__uid') and card._Control__uid is None:
-                            logger.warning(f"Card UID is None for {recording.rec_id}, skipping update")
+                            # 静默跳过UID为None的更新，避免频繁警告
+                            logger.debug(f"Card UID is None for {recording.rec_id}, skipping update (control not ready)")
+                            return
+                            
+                        # 检查卡片是否仍然存在于页面中
+                        if not hasattr(card, 'page') or card.page is None:
+                            logger.debug(f"Card {recording.rec_id} is not attached to page, skipping update")
                             return
                             
                         self.app.page.update()
@@ -306,7 +313,7 @@ class RecordingCardManager:
                         logger.debug(f"Page disconnected during update: {e}")
                         return
                     except Exception as e:
-                        logger.warning(f"Unexpected error during page update for {recording.rec_id}: {e}")
+                        logger.debug(f"Unexpected error during page update for {recording.rec_id}: {e}")
                         return
                 else:
                     logger.debug(f"Page disconnected before final update for: {recording.rec_id}")
@@ -365,7 +372,7 @@ class RecordingCardManager:
             self.app.page.run_task(self.app.record_manager.check_if_live, recording)
             self.app.page.run_task(self.app.snack_bar.show_snack_bar, self._["start_monitor_tip"], ft.Colors.GREEN)
 
-        await self.update_card(recording)
+        # 只通过pubsub机制更新UI，避免双重更新和绕过频率限制
         self.app.page.pubsub.send_others_on_topic("update", recording)
         self.app.page.run_task(self.app.record_manager.persist_recordings)
 
@@ -396,7 +403,7 @@ class RecordingCardManager:
         recording.scheduled_time_range = await self.app.record_manager.get_scheduled_time_range(
             recording.scheduled_start_time, recording.monitor_hours)
 
-        await self.update_card(recording)
+        # 只通过pubsub机制更新UI，避免双重更新和绕过频率限制
         self.app.page.pubsub.send_others_on_topic("update", recording_dict)
 
     async def on_toggle_recording(self, recording: Recording):
@@ -416,7 +423,7 @@ class RecordingCardManager:
                 else:
                     await self.app.snack_bar.show_snack_bar(self._["please_start_monitor_tip"])
 
-            await self.update_card(recording)
+            # 只通过pubsub机制更新UI，避免双重更新和绕过频率限制
             self.app.page.pubsub.send_others_on_topic("update", recording)
 
     async def on_delete_recording(self, recording: Recording):
@@ -481,6 +488,11 @@ class RecordingCardManager:
                         logger.debug(f"Cancelled update task for: {rec_id}")
                     except Exception as e:
                         logger.debug(f"Failed to cancel update task for {rec_id}: {e}")
+                        
+                # 清理更新时间记录
+                if rec_id in self.last_update_time:
+                    del self.last_update_time[rec_id]
+                    logger.debug(f"Cleaned up update time record for: {rec_id}")
 
             # Update UI with timeout protection
             if self._is_page_connected():
@@ -683,6 +695,27 @@ class RecordingCardManager:
         await self.on_card_click(recording)
 
     async def subscribe_update_card(self, _, recording: Recording):
+        """处理来自pubsub的卡片更新请求，包含频率限制"""
+        # 检查页面连接状态，避免在页面断开时进行无效更新
+        if not self._is_page_connected():
+            logger.debug(f"Page disconnected, skipping pubsub update for: {recording.rec_id}")
+            return
+            
+        # 检查卡片是否存在
+        if recording.rec_id not in self.cards_obj:
+            logger.debug(f"Card not found for pubsub update: {recording.rec_id}")
+            return
+            
+        # 频率限制：同一个录制任务在500ms内最多更新一次
+        import time
+        current_time = time.time()
+        last_update = self.last_update_time.get(recording.rec_id, 0)
+        
+        if current_time - last_update < 0.5:  # 500ms内不重复更新
+            logger.debug(f"Update rate limited for {recording.rec_id}, skipping")
+            return
+            
+        self.last_update_time[recording.rec_id] = current_time
         await self.update_card(recording)
 
     async def subscribe_remove_cards(self, _, recordings: list[Recording]):
