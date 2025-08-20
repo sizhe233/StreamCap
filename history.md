@@ -1,5 +1,69 @@
 # StreamCap 开发历史
 
+## 2025-08-21 01:30:37 - 修复API阻塞修复后的"Card not found"频繁日志问题
+
+### 问题描述
+修复API阻塞问题后，后台频繁出现"Card not found for recording"的DEBUG日志，表明UI卡片创建和速度更新存在时序问题。
+
+### 问题分析
+**根本原因**：简化API流程后，时序问题暴露：
+
+1. **时序冲突**：
+   - API录制任务启动后，`speed_update_callback`立即开始调用
+   - 但此时UI卡片可能还没通过pubsub机制创建完成
+   - 导致速度回调尝试更新不存在的卡片
+
+2. **创建延迟**：
+   - 之前移除了FastAPI中的直接卡片创建逻辑
+   - 改为只发送pubsub通知，但pubsub处理有延迟
+   - 速度回调比卡片创建更早触发
+
+3. **日志噪音**：
+   - 每2秒的速度更新都会产生"Card not found"日志
+   - 大量录制任务时日志频繁刷屏
+
+### 核心修复方案
+
+#### 1. **自动创建卡片机制**
+```python
+# 在update_card中添加自动创建逻辑
+if recording.rec_id not in self.cards_obj:
+    logger.debug(f"Card not found for recording: {recording.rec_id}, attempting to create it")
+    card = await self.create_card(recording)
+    if card is None:
+        return
+```
+
+#### 2. **统一UI更新机制**
+```python
+# 修改前：直接调用update_card
+self.app.page.run_task(self.app.record_card_manager.update_card, self.recording)
+
+# 修改后：使用pubsub机制
+self.app.page.pubsub.send_others_on_topic("update", self.recording)
+```
+
+#### 3. **增强卡片创建**
+```python
+# 在create_card中添加自动添加到页面的逻辑
+if (hasattr(self.app, 'current_page') and 
+    self.app.current_page and 
+    hasattr(self.app.current_page, 'recording_card_area')):
+    self.app.current_page.recording_card_area.content.controls.append(card)
+    self.app.current_page.recording_card_area.update()
+```
+
+### 技术细节
+- **时序安全**：确保卡片在需要时能自动创建，避免时序依赖
+- **统一机制**：所有UI更新都通过pubsub路由，避免直接调用混乱
+- **减少日志噪音**：解决频繁"Card not found"警告问题
+
+### 预期效果
+- 消除频繁的"Card not found"日志
+- 提升UI响应的稳定性
+- 确保录制速度显示正常工作
+- 维持API高并发性能
+
 ## 2025-01-19 11:32:18 - 修复API创建到录制流程中的阻塞问题
 
 ### 问题描述
