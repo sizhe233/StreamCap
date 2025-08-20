@@ -10,12 +10,18 @@ from ...utils.logger import logger
 
 # 全局并发控制信号量
 _global_semaphore = None
+_current_max_concurrent = None
 
 async def get_global_semaphore(max_concurrent: int = 8) -> asyncio.Semaphore:
     """获取全局并发控制信号量"""
-    global _global_semaphore
-    if _global_semaphore is None:
+    global _global_semaphore, _current_max_concurrent
+    
+    # 如果配置发生变化，重新创建信号量
+    if _global_semaphore is None or _current_max_concurrent != max_concurrent:
+        logger.info(f"初始化/更新全局信号量，最大并发数: {max_concurrent}")
         _global_semaphore = asyncio.Semaphore(max_concurrent)
+        _current_max_concurrent = max_concurrent
+    
     return _global_semaphore
 
 

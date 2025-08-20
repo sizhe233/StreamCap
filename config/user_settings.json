@@ -12,7 +12,7 @@
     "video_format": "TS",
     "record_quality": "OD",
     "loop_time_seconds": "180",
-    "segmented_recording_enabled": true,
+    "segmented_recording_enabled": false,
     "force_https_recording": true,
     "default_live_source": "FLV",
     "flv_use_direct_download": false,
@@ -66,5 +66,8 @@
     "platform_max_concurrent_requests": "3",
     "auto_remove_custom_stream_tasks": true,
     "direct_download_max_retries": 3,
-    "direct_download_retry_delay": 5
+    "direct_download_retry_delay": 5,
+    "custom_stream_buffer_time": 60,
+    "custom_stream_retry_interval": 10,
+    "max_concurrent_custom_streams": 100
 }
