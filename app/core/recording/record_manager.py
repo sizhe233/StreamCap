@@ -14,7 +14,7 @@ from .stream_manager import LiveStreamRecorder
 
 class GlobalRecordingState:
     recordings = []
-    lock = threading.Lock()
+    lock = asyncio.Lock()  # 改为异步锁，避免阻塞
 
 
 class RecordingManager:
@@ -60,27 +60,33 @@ class RecordingManager:
             recording.update_title(self._[recording.quality])
 
     async def add_recording(self, recording):
-        with GlobalRecordingState.lock:
+        async with GlobalRecordingState.lock:
             GlobalRecordingState.recordings.append(recording)
-            await self.persist_recordings()
+        # 文件I/O移到锁外执行，减少锁持有时间
+        await self.persist_recordings()
 
     async def remove_recording(self, recording: Recording):
         try:
-            with GlobalRecordingState.lock:
+            removed = False
+            async with GlobalRecordingState.lock:
                 if recording in GlobalRecordingState.recordings:
                     GlobalRecordingState.recordings.remove(recording)
                     logger.debug(f"Recording removed from list: {recording.rec_id}")
+                    removed = True
                 else:
                     logger.warning(f"Recording not found in list: {recording.rec_id}")
+            # 文件I/O移到锁外执行
+            if removed:
                 await self.persist_recordings()
         except Exception as e:
             logger.error(f"Failed to remove recording {recording.rec_id}: {e}")
             raise
 
     async def clear_all_recordings(self):
-        with GlobalRecordingState.lock:
+        async with GlobalRecordingState.lock:
             GlobalRecordingState.recordings.clear()
-            await self.persist_recordings()
+        # 文件I/O移到锁外执行
+        await self.persist_recordings()
 
     async def persist_recordings(self):
         """Persist recordings to a JSON file."""
@@ -119,17 +125,30 @@ class RecordingManager:
                 selected=False,
             )
             
+            # 批量处理UI和后台任务，减少阻塞
+            tasks = []
+            
             # For custom streams, directly start recording without live checking
             if recording.platform_key == "custom":
                 logger.info(f"Starting custom stream recording directly: {recording.url}")
-                self.app.page.run_task(self._start_custom_stream_recording, recording)
+                tasks.append(self._start_custom_stream_recording(recording))
             else:
-                self.app.page.run_task(self.check_if_live, recording)
-                
-            self.app.page.run_task(self.app.record_card_manager.update_card, recording)
-            self.app.page.pubsub.send_others_on_topic("update", recording)
+                tasks.append(self.check_if_live(recording))
+            
+            # UI更新通过pubsub非阻塞方式处理
+            try:
+                self.app.page.pubsub.send_others_on_topic("update", recording)
+            except Exception as e:
+                logger.debug(f"Failed to send pubsub update: {e}")
+            
+            # 文件保存使用异步任务，不阻塞主流程
             if auto_save:
-                self.app.page.run_task(self.persist_recordings)
+                asyncio.create_task(self.persist_recordings())
+            
+            # 启动所有任务（非阻塞）
+            if tasks:
+                for task in tasks:
+                    asyncio.create_task(task)
 
     async def stop_monitor_recording(self, recording: Recording, auto_save: bool = True):
         """

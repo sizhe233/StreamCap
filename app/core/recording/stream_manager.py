@@ -88,12 +88,20 @@ class LiveStreamRecorder:
             # Step 1: Remove from backend task list (critical operation)
             try:
                 from ...core.recording.record_manager import GlobalRecordingState
-                with GlobalRecordingState.lock:
-                    if self.recording in GlobalRecordingState.recordings:
-                        GlobalRecordingState.recordings.remove(self.recording)
-                        logger.info(f"Removed recording from backend: {record_name}")
-                    else:
-                        logger.debug(f"Recording already removed from backend: {record_name}")
+                # 改为非阻塞方式处理
+                try:
+                    # 使用异步任务处理，避免阻塞当前线程
+                    async def async_remove():
+                        async with GlobalRecordingState.lock:
+                            if self.recording in GlobalRecordingState.recordings:
+                                GlobalRecordingState.recordings.remove(self.recording)
+                                logger.info(f"Removed recording from backend: {record_name}")
+                            else:
+                                logger.debug(f"Recording already removed from backend: {record_name}")
+                    
+                    asyncio.create_task(async_remove())
+                except Exception as async_error:
+                    logger.warning(f"Failed to schedule async removal: {async_error}")
                 
                 # Try to persist config, but don't block if it fails
                 try:
