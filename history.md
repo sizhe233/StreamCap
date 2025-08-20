@@ -1,5 +1,78 @@
 # StreamCap 开发历史
 
+## 2025-08-21 00:56:06 - 修复并发配置不生效的问题
+
+### 问题描述
+用户已经设置`max_concurrent_custom_streams: 100`，但第9个及以后的任务还是处于"等待中"状态，说明并发配置没有生效。
+
+### 问题分析
+1. **配置文件问题**：
+   - `default_settings.json`中设置了100
+   - 但`user_settings.json`中缺少`max_concurrent_custom_streams`配置项
+   - 系统优先使用user_settings，缺少时使用默认值8
+
+2. **全局信号量不会动态更新**：
+   ```python
+   if _global_semaphore is None:  # 只有第一次才初始化！
+       _global_semaphore = asyncio.Semaphore(max_concurrent)
+   ```
+   - 首次启动时创建信号量为8
+   - 后续修改配置，信号量不会重新创建
+   - 依然是8个并发限制
+
+### 核心修复方案
+1. **添加配置到user_settings.json**：
+   ```json
+   {
+     "max_concurrent_custom_streams": 100,
+     "custom_stream_buffer_time": 60,
+     "custom_stream_retry_interval": 10
+   }
+   ```
+
+2. **修复全局信号量动态更新**：
+   ```python
+   # 如果配置发生变化，重新创建信号量
+   if _global_semaphore is None or _current_max_concurrent != max_concurrent:
+       logger.info(f"初始化/更新全局信号量，最大并发数: {max_concurrent}")
+       _global_semaphore = asyncio.Semaphore(max_concurrent)
+       _current_max_concurrent = max_concurrent
+   ```
+
+### 技术细节
+- 修改了`direct_downloader.py`中的`get_global_semaphore`函数
+- 添加了配置变化检测机制
+- 现在信号量会自动根据配置更新，无需重启应用
+
+## 2025-01-19 11:17:22 - 修复第8个任务后下载速度不更新的并发限制问题
+
+### 问题描述
+用户反馈在任务模板第8个任务之后，下载速度不更新了，只更新下载时间，需要检查面板更新逻辑。
+
+### 问题分析
+1. **并发限制配置**：系统配置`max_concurrent_custom_streams: 8`，最多同时下载8个自定义流
+2. **信号量阻塞**：第9个及以后的任务在`async with semaphore:`处等待，无法进入实际下载循环
+3. **速度更新缺失**：被阻塞的任务虽然显示"运行中"，但没有触发速度更新回调，导致UI只显示时间不显示速度
+
+### 核心修复方案
+1. **添加等待状态检测**：
+   - 在获取信号量前检查`semaphore._value == 0`判断是否需要等待
+   - 创建等待期间的UI更新任务，定期显示"等待中..."状态
+
+2. **优化UI反馈机制**：
+   - 修改速度更新回调逻辑，当`total_bytes == 0 && elapsed_time > 0`时显示"等待中..."
+   - 在等待信号量期间创建定期更新任务，每2秒更新一次状态
+
+3. **完善异常处理**：
+   - 添加等待任务的清理逻辑，确保异常情况下也能正确清理资源
+   - 在获得信号量后立即取消等待状态更新任务
+
+### 技术细节
+- 修改了`direct_downloader.py`中的`_download_custom_stream`方法
+- 修改了`stream_manager.py`中的`speed_update_callback`函数
+- 实现了并发等待期间的UI状态反馈机制
+- 确保用户能看到任务的真实状态（等待中/下载中）
+
 ## 2025-08-20 00:07:01 - 进一步修复双重UI更新问题
 
 ### 问题描述
