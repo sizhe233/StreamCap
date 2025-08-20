@@ -455,7 +455,10 @@ class LiveStreamRecorder:
 
             # Create speed update callback
             def speed_update_callback(total_bytes: int, elapsed_time: float):
-                if elapsed_time > 0:
+                if total_bytes == 0 and elapsed_time > 0:
+                    # 特殊情况：等待并发槽位
+                    self.recording.speed = "等待中..."
+                elif elapsed_time > 0:
                     bytes_per_sec = total_bytes / elapsed_time
                     if bytes_per_sec >= 1024 * 1024:  # MB/s
                         self.recording.speed = f"{bytes_per_sec / (1024 * 1024):.1f} MB/s"
@@ -476,6 +479,11 @@ class LiveStreamRecorder:
             max_retries = self.user_config.get("direct_download_max_retries", 3)
             retry_delay = self.user_config.get("direct_download_retry_delay", 5)
             
+            # 自定义流断流重连策略参数
+            custom_stream_buffer_time = self.user_config.get("custom_stream_buffer_time", 60)  # 缓冲等待时间，默认60秒
+            custom_stream_retry_interval = self.user_config.get("custom_stream_retry_interval", 10)  # 重连间隔，默认10秒
+            max_concurrent_downloads = self.user_config.get("max_concurrent_custom_streams", 8)  # 最大并发自定义流数，默认8
+            
             self.direct_downloader = DirectStreamDownloader(
                 record_url=record_url,
                 save_path=save_path,
@@ -483,7 +491,10 @@ class LiveStreamRecorder:
                 proxy=self.proxy,
                 speed_callback=speed_update_callback,
                 max_retries=max_retries,
-                retry_delay=retry_delay
+                retry_delay=retry_delay,
+                custom_stream_buffer_time=custom_stream_buffer_time,
+                custom_stream_retry_interval=custom_stream_retry_interval,
+                max_concurrent_downloads=max_concurrent_downloads
             )
 
             self.app.page.run_task(
