@@ -1,5 +1,96 @@
 # StreamCap 开发历史
 
+## 2025-01-19 11:32:18 - 修复API创建到录制流程中的阻塞问题
+
+### 问题描述
+用户反馈通过API创建录制任务时，发现有些阻塞问题会导致其他任务间歇性断流。需要排查API从创建到开始录制的整个流程中的阻塞点。
+
+### 问题分析
+通过详细代码审查，发现了API流程中的关键阻塞点：
+
+1. **线程锁竞争阻塞**：
+   - `GlobalRecordingState.lock`使用`threading.Lock()`
+   - 多个API请求同时创建任务时会在锁上排队等待
+   - 文件I/O操作在锁内执行，增加锁持有时间
+
+2. **文件I/O重试机制阻塞**：
+   - `persist_recordings()`有3次重试机制
+   - 最坏情况可能阻塞几秒钟
+
+3. **大量page.run_task堆积**：
+   - `start_monitor_recording()`中连续3个`page.run_task`调用
+   - UI任务队列可能堵塞
+
+4. **复杂UI同步更新阻塞**：
+   - FastAPI中140行复杂UI同步逻辑
+   - 大量同步UI操作可能阻塞
+
+### 核心修复方案
+
+#### 1. **线程锁改为异步锁**
+```python
+# 修改前
+class GlobalRecordingState:
+    lock = threading.Lock()
+
+with GlobalRecordingState.lock:
+    GlobalRecordingState.recordings.append(recording)
+    await self.persist_recordings()  # 文件I/O在锁内！
+
+# 修改后  
+class GlobalRecordingState:
+    lock = asyncio.Lock()
+
+async with GlobalRecordingState.lock:
+    GlobalRecordingState.recordings.append(recording)
+# 文件I/O移到锁外执行
+await self.persist_recordings()
+```
+
+#### 2. **优化批量任务处理**
+```python
+# 修改前：连续多个page.run_task调用
+self.app.page.run_task(self._start_custom_stream_recording, recording)
+self.app.page.run_task(self.app.record_card_manager.update_card, recording)
+self.app.page.run_task(self.persist_recordings)
+
+# 修改后：使用异步任务，避免阻塞
+tasks = [self._start_custom_stream_recording(recording)]
+asyncio.create_task(self.persist_recordings())
+for task in tasks:
+    asyncio.create_task(task)
+```
+
+#### 3. **简化UI更新流程**
+```python
+# 修改前：140行复杂UI同步逻辑
+# 大量同步页面操作...
+
+# 修改后：简单pubsub通知
+self.app_manager.page.pubsub.send_others_on_topic("add", recording)
+```
+
+#### 4. **文件I/O防抖动优化**
+```python
+async def _save_config_with_debounce(self, config_path, config, delay=0.5):
+    # 防抖动保存机制，短时间内多次保存请求只执行最后一次
+    if config_path in self._pending_saves:
+        self._pending_saves[config_path].cancel()
+    self._pending_saves[config_path] = asyncio.create_task(delayed_save())
+```
+
+### 技术细节
+- 修改了`record_manager.py`中的锁机制和任务调度
+- 修改了`stream_manager.py`中的异步任务处理
+- 简化了`fastapi_server.py`中的UI更新逻辑
+- 优化了`config_manager.py`中的文件保存机制
+
+### 预期效果
+- 消除多个API请求的锁竞争
+- 大幅减少间歇性断流风险  
+- 提升高并发场景下的响应性能
+- 改善API调用的稳定性
+
 ## 2025-08-21 00:56:06 - 修复并发配置不生效的问题
 
 ### 问题描述
