@@ -1,0 +1,79 @@
+{
+  "// 自定义流断流重连配置示例": "",
+  "// 以下配置可以添加到 config/user_settings.json 中": "",
+  
+  "custom_stream_buffer_time": 60,
+  "// 说明": "自定义流断流后的缓冲等待时间（秒），默认60秒",
+  "// 建议值": "稳定网络: 30-45秒, 不稳定网络: 90-120秒",
+  
+  "custom_stream_retry_interval": 10,
+  "// 说明": "自定义流重连尝试的间隔时间（秒），默认10秒", 
+  "// 建议值": "稳定网络: 5-8秒, 不稳定网络: 15-20秒",
+  
+  "// 其他相关配置": "",
+  "direct_download_max_retries": 3,
+  "// 说明": "常规流的最大重试次数",
+  
+  "direct_download_retry_delay": 5,
+  "// 说明": "常规流的重试延迟时间（秒）",
+  
+  "auto_remove_custom_stream_tasks": true,
+  "// 说明": "自定义流完成后是否自动移除任务",
+  
+  "// 使用场景配置示例": "",
+  "// 场景1: 高稳定性网络环境": {
+    "custom_stream_buffer_time": 30,
+    "custom_stream_retry_interval": 5
+  },
+  
+  "// 场景2: 一般网络环境（推荐）": {
+    "custom_stream_buffer_time": 60,
+    "custom_stream_retry_interval": 10
+  },
+  
+  "// 场景3: 不稳定网络环境": {
+    "custom_stream_buffer_time": 120,
+    "custom_stream_retry_interval": 15
+  },
+  
+  "// 场景4: 重要直播录制": {
+    "custom_stream_buffer_time": 180,
+    "custom_stream_retry_interval": 20
+  },
+  
+  "// 新增配置项": "",
+  "max_concurrent_custom_streams": 8,
+  "// 说明": "同时录制的自定义流最大数量，建议根据网络和硬件性能调整",
+  
+  "// 并发数配置建议": "",
+  "// 低配置设备 (4GB RAM, 双核CPU)": {
+    "max_concurrent_custom_streams": 4,
+    "custom_stream_buffer_time": 90,
+    "custom_stream_retry_interval": 15
+  },
+  
+  "// 中等配置设备 (8GB RAM, 四核CPU)": {
+    "max_concurrent_custom_streams": 8,
+    "custom_stream_buffer_time": 60,
+    "custom_stream_retry_interval": 10
+  },
+  
+  "// 高配置设备 (16GB+ RAM, 八核+ CPU)": {
+    "max_concurrent_custom_streams": 16,
+    "custom_stream_buffer_time": 45,
+    "custom_stream_retry_interval": 8
+  },
+  
+  "// 网络环境配置建议": "",
+  "// 不稳定网络环境": {
+    "max_concurrent_custom_streams": 4,
+    "custom_stream_buffer_time": 120,
+    "custom_stream_retry_interval": 20
+  },
+  
+  "// 高速稳定网络": {
+    "max_concurrent_custom_streams": 12,
+    "custom_stream_buffer_time": 30,
+    "custom_stream_retry_interval": 5
+  }
+}
