@@ -1,3 +1,4 @@
+import asyncio
 import json
 import os
 import shutil
@@ -179,12 +180,35 @@ class ConfigManager:
                         logger.error(f"Fallback save also failed: {fallback_error}")
 
     async def save_recordings_config(self, config):
-        await self._save_config(
+        # 使用批量保存机制，减少频繁文件I/O
+        await self._save_config_with_debounce(
             self.recordings_config_path,
             config,
             success_message="Recordings configuration saved.",
             error_message="An error occurred while saving recordings config",
         )
+    
+    async def _save_config_with_debounce(self, config_path, config, success_message, error_message, delay=0.5):
+        """
+        防抖动保存机制，在短时间内多次保存请求时，只执行最后一次
+        """
+        # 记录保存任务
+        if not hasattr(self, '_pending_saves'):
+            self._pending_saves = {}
+        
+        # 取消之前的保存任务
+        if config_path in self._pending_saves:
+            self._pending_saves[config_path].cancel()
+        
+        # 创建新的延迟保存任务
+        async def delayed_save():
+            await asyncio.sleep(delay)
+            await self._save_config(config_path, config, success_message, error_message)
+            # 清理已完成的任务
+            if config_path in self._pending_saves:
+                del self._pending_saves[config_path]
+        
+        self._pending_saves[config_path] = asyncio.create_task(delayed_save())
 
     async def save_accounts_config(self, config):
         await self._save_config(
