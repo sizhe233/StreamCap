@@ -67,6 +67,9 @@ class RecordingCardManager:
             # 将卡片数据存储到管理器中
             self.cards_obj[rec_id] = card_data
             
+            # 移除自动添加到页面的逻辑，避免UI阻塞
+            # UI添加应该由pubsub机制统一处理
+            
             # 启动更新任务
             self.start_update_task(recording)
             
@@ -230,8 +233,8 @@ class RecordingCardManager:
             logger.debug(f"Page disconnected, skipping card update for: {recording.rec_id}")
             return
             
+        # 如果卡片不存在，静默返回（卡片应该由pubsub机制创建）
         if recording.rec_id not in self.cards_obj:
-            logger.debug(f"Card not found for recording: {recording.rec_id}")
             return
             
         try:

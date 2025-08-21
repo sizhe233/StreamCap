@@ -699,23 +699,36 @@ class RecordingsPage(PageBase):
                     card = await self.app.record_card_manager.create_card(recording)
                     
                     if card:
-                        # 设置计划时间范围
-                        recording.scheduled_time_range = await self.app.record_manager.get_scheduled_time_range(
-                            recording.scheduled_start_time, recording.monitor_hours
-                        )
-                        
-                        # 添加卡片到UI
-                        self.recording_card_area.content.controls.append(card)
-                        logger.debug(f"Added card to UI for: {recording.streamer_name}")
-                        
-                        # 更新UI
-                        self.recording_card_area.update()
-                        
-                        # 更新过滤区域
-                        self.content_area.controls[1] = self.create_filter_area()
-                        self.content_area.update()
-                        
-                        logger.info(f"Successfully added card for: {recording.streamer_name}")
+                        try:
+                            # 设置计划时间范围
+                            recording.scheduled_time_range = await self.app.record_manager.get_scheduled_time_range(
+                                recording.scheduled_start_time, recording.monitor_hours
+                            )
+                            
+                            # 检查页面连接状态，避免在页面断开时更新UI
+                            if hasattr(self.page, 'session_id') and self.page.session_id:
+                                # 添加卡片到UI
+                                self.recording_card_area.content.controls.append(card)
+                                logger.debug(f"Added card to UI for: {recording.streamer_name}")
+                                
+                                # 安全的UI更新
+                                try:
+                                    self.recording_card_area.update()
+                                    
+                                    # 更新过滤区域
+                                    self.content_area.controls[1] = self.create_filter_area()
+                                    self.content_area.update()
+                                    
+                                    logger.info(f"Successfully added card for: {recording.streamer_name}")
+                                except Exception as ui_error:
+                                    logger.warning(f"UI update failed for {recording.streamer_name}: {ui_error}")
+                                    # 如果UI更新失败，从控件列表中移除卡片
+                                    if card in self.recording_card_area.content.controls:
+                                        self.recording_card_area.content.controls.remove(card)
+                            else:
+                                logger.debug(f"Page disconnected, skipping UI update for: {recording.streamer_name}")
+                        except Exception as e:
+                            logger.error(f"Error processing card addition for {recording.streamer_name}: {e}")
                     else:
                         logger.warning(f"Failed to create card for: {recording.streamer_name}")
                 else:

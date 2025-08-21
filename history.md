@@ -1,5 +1,74 @@
 # StreamCap 开发历史
 
+## 2025-08-21 03:01:30 - 修复录制任务列表卡死问题
+
+### 问题描述
+修复"Card not found"日志问题后，用户反馈录制任务列表卡住了，UI无响应。
+
+### 问题分析
+**根本原因**：在修复过程中引入的新的UI阻塞问题：
+
+1. **同步UI操作阻塞**：
+   - `subscribe_add_cards`方法中执行同步UI更新
+   - `self.recording_card_area.update()` 和 `self.content_area.update()` 可能在错误时机执行
+   - 没有页面连接状态检查，可能在页面断开时进行UI操作
+
+2. **消息风暴问题**：
+   - 速度回调每2秒发送UI更新请求
+   - 多个录制任务同时更新，UI响应不过来
+   - 缺少频率限制机制
+
+3. **错误处理不足**：
+   - UI更新失败时没有回滚机制
+   - 缺少异常捕获，一旦出错就卡死
+
+### 核心修复方案
+
+#### 1. **增强UI更新安全性**
+```python
+# 添加页面连接状态检查
+if hasattr(self.page, 'session_id') and self.page.session_id:
+    # 安全的UI更新
+    try:
+        self.recording_card_area.update()
+        self.content_area.update()
+    except Exception as ui_error:
+        logger.warning(f"UI update failed: {ui_error}")
+        # 自动回滚
+        if card in self.recording_card_area.content.controls:
+            self.recording_card_area.content.controls.remove(card)
+```
+
+#### 2. **速度更新频率限制**
+```python
+# 修改前：每2秒更新
+if current_time - self.last_speed_update >= 2.0:
+
+# 修改后：每秒最多1次，减少UI负担
+if current_time - last_ui_update >= 1.0:
+    self.app.page.run_task(self.app.record_card_manager.update_card, self.recording)
+    self._last_ui_update = current_time
+```
+
+#### 3. **静默处理机制**
+```python
+# 移除频繁的日志输出，静默处理
+if recording.rec_id not in self.cards_obj:
+    return  # 静默返回，不记录日志
+```
+
+### 技术细节
+- **页面状态检查**：在UI操作前检查页面连接状态
+- **错误回滚**：UI更新失败时自动清理已添加的控件
+- **频率控制**：限制UI更新频率，避免过度负担
+- **异常隔离**：增强异常处理，避免单个错误影响整体
+
+### 预期效果
+- 消除UI卡死问题，恢复正常响应
+- 减少UI更新频率，提升性能
+- 增强系统稳定性和错误恢复能力
+- 保持录制功能正常工作
+
 ## 2025-08-21 01:30:37 - 修复API阻塞修复后的"Card not found"频繁日志问题
 
 ### 问题描述

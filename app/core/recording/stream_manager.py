@@ -477,9 +477,15 @@ class LiveStreamRecorder:
                 else:
                     self.recording.speed = "0 B/s"
                 
-                # Update UI asynchronously
+                # 使用限频的直接调用，避免过度更新
                 try:
-                    self.app.page.run_task(self.app.record_card_manager.update_card, self.recording)
+                    # 检查上次更新时间，避免过于频繁的UI更新
+                    current_time = time.time()
+                    last_ui_update = getattr(self, '_last_ui_update', 0)
+                    
+                    if current_time - last_ui_update >= 1.0:  # 限制为每秒最多1次UI更新
+                        self.app.page.run_task(self.app.record_card_manager.update_card, self.recording)
+                        self._last_ui_update = current_time
                 except Exception as e:
                     logger.debug(f"Failed to update speed in UI: {e}")
 
