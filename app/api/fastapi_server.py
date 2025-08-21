@@ -580,7 +580,7 @@ class FastAPIServer:
                 "record_format": "flv",  # 使用FLV格式，更安全，异常停止不会损坏文件
                 "segment_record": False,
                 "segment_time": 30,
-                "monitor_status": False,
+                "monitor_status": True,  # API添加的任务默认开始监控
                 "only_notify_no_record": False,
                 "scheduled_recording": False,
                 "scheduled_start_time": None,
@@ -601,26 +601,71 @@ class FastAPIServer:
             # 对于自定义流，直接开始录制而不是监控
             # 这样可以避免不必要的定时检测，减少被限流的风险
             logger.info(f"API自定义流任务直接开始录制: {recording.streamer_name}")
-            await record_manager.start_monitor_recording(recording)
+            # 由于monitor_status已经是True，直接调用自定义流录制方法
+            await record_manager._start_custom_stream_recording(recording)
             
-            # 简化UI更新流程，避免阻塞
+            # 修复UI更新流程，确保卡片正确创建和显示
             try:
                 # 设置计划时间范围
                 recording.scheduled_time_range = await self.app_manager.record_manager.get_scheduled_time_range(
                     recording.scheduled_start_time, recording.monitor_hours
                 )
                 
-                logger.info(f"API录制任务UI通知 - 主播: {recording.streamer_name}, ID: {recording.rec_id}")
+                logger.info(f"API录制任务UI更新 - 主播: {recording.streamer_name}, ID: {recording.rec_id}")
                 
-                # 使用简单的pubsub通知，让UI自己处理
-                if hasattr(self.app_manager, 'page') and self.app_manager.page and hasattr(self.app_manager.page, 'pubsub'):
-                    self.app_manager.page.pubsub.send_others_on_topic("add", recording)
-                    logger.debug(f"已发送UI添加通知: {recording.streamer_name}")
+                # 确保record_card_manager存在
+                if hasattr(self.app_manager, 'record_card_manager') and self.app_manager.record_card_manager:
+                    # 创建卡片并添加到管理器
+                    card = await self.app_manager.record_card_manager.create_card(recording)
+                    if card:
+                        logger.debug(f"API成功创建卡片: {recording.streamer_name}")
+                        
+                        # 如果当前页面是recordings页面，直接添加到UI
+                        if (hasattr(self.app_manager, 'current_page') and 
+                            hasattr(self.app_manager.current_page, 'page_name') and
+                            self.app_manager.current_page.page_name == 'recordings'):
+                            
+                            try:
+                                # 直接添加到录制页面
+                                recordings_page = self.app_manager.current_page
+                                if hasattr(recordings_page, 'recording_card_area') and recordings_page.recording_card_area:
+                                    recordings_page.recording_card_area.content.controls.append(card)
+                                    recordings_page.recording_card_area.update()
+                                    
+                                    # 更新过滤器区域
+                                    if hasattr(recordings_page, 'content_area') and len(recordings_page.content_area.controls) > 1:
+                                        recordings_page.content_area.controls[1] = recordings_page.create_filter_area()
+                                        recordings_page.content_area.update()
+                                    
+                                    logger.info(f"API卡片已直接添加到录制页面: {recording.streamer_name}")
+                                else:
+                                    logger.warning("录制页面区域不可用，使用pubsub通知")
+                                    # 回退到pubsub通知
+                                    self.app_manager.page.pubsub.send_others_on_topic("add", recording)
+                            except Exception as ui_error:
+                                logger.error(f"直接添加卡片到UI失败: {ui_error}")
+                                # 回退到pubsub通知
+                                self.app_manager.page.pubsub.send_others_on_topic("add", recording)
+                        else:
+                            # 非录制页面，使用pubsub通知
+                            self.app_manager.page.pubsub.send_others_on_topic("add", recording)
+                            logger.debug(f"已发送pubsub添加通知: {recording.streamer_name}")
+                    else:
+                        logger.error(f"API创建卡片失败: {recording.streamer_name}")
                 else:
-                    logger.warning("页面或pubsub不可用，跳过UI更新")
-                    
+                    logger.warning("record_card_manager不可用，使用pubsub通知")
+                    # 回退到pubsub通知
+                    if hasattr(self.app_manager, 'page') and self.app_manager.page and hasattr(self.app_manager.page, 'pubsub'):
+                        self.app_manager.page.pubsub.send_others_on_topic("add", recording)
+                        
             except Exception as e:
-                logger.debug(f"UI通知失败: {str(e)}")  # 降低错误级别，避免日志噪音
+                logger.error(f"API UI更新失败: {str(e)}")
+                # 最后的回退方案
+                try:
+                    if hasattr(self.app_manager, 'page') and self.app_manager.page and hasattr(self.app_manager.page, 'pubsub'):
+                        self.app_manager.page.pubsub.send_others_on_topic("add", recording)
+                except:
+                    pass
             
             logger.info(f"成功创建并启动录制任务: {recording.rec_id}")
             return recording.rec_id

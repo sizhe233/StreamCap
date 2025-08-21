@@ -542,10 +542,21 @@ class RecordingsPage(PageBase):
 
         if new_recordings:
             async def create_card_with_time_range(rec):
+                # 创建卡片并设置计划时间范围
                 _card = await self.app.record_card_manager.create_card(rec)
-                rec.scheduled_time_range = await self.app.record_manager.get_scheduled_time_range(
-                    rec.scheduled_start_time, rec.monitor_hours
-                )
+                if _card:
+                    rec.scheduled_time_range = await self.app.record_manager.get_scheduled_time_range(
+                        rec.scheduled_start_time, rec.monitor_hours
+                    )
+                    # 确保卡片已添加到管理器中
+                    if rec.rec_id in self.app.record_card_manager.cards_obj:
+                        # 将卡片添加到UI
+                        self.recording_card_area.content.controls.append(_card)
+                        logger.debug(f"Added card to UI for: {rec.streamer_name}")
+                    else:
+                        logger.warning(f"Card not found in manager after creation: {rec.rec_id}")
+                else:
+                    logger.error(f"Failed to create card for: {rec.streamer_name}")
                 return _card, rec
 
             results = await asyncio.gather(*[
@@ -553,15 +564,26 @@ class RecordingsPage(PageBase):
                 for rec in new_recordings
             ])
 
-            for card, recording in results:
-                self.recording_card_area.content.controls.append(card)
-                self.app.record_card_manager.cards_obj[recording.rec_id]["card"] = card
-                self.app.page.pubsub.send_others_on_topic("add", recording)
+            # 统计成功创建的卡片数量
+            successful_cards = [result for result in results if result[0] is not None]
             
-            self.recording_card_area.update()
-            
-            self.content_area.controls[1] = self.create_filter_area()
-            self.content_area.update()
+            if successful_cards:
+                # 更新UI显示
+                self.recording_card_area.update()
+                
+                # 更新过滤器区域
+                self.content_area.controls[1] = self.create_filter_area()
+                self.content_area.update()
+                
+                # 对于自定义流，立即开始录制
+                for card, recording in successful_cards:
+                    if recording.platform_key == "custom" and recording.monitor_status:
+                        logger.info(f"Starting custom stream recording for: {recording.streamer_name}")
+                        self.app.page.run_task(self.app.record_manager.start_monitor_recording, recording)
+                
+                logger.info(f"Successfully added {len(successful_cards)} cards to UI")
+            else:
+                logger.error("No cards were successfully created and added to UI")
 
         await self.app.snack_bar.show_snack_bar(self._["add_recording_success_tip"], bgcolor=ft.Colors.GREEN)
 
@@ -697,6 +719,7 @@ class RecordingsPage(PageBase):
                 if not card_exists_in_ui:
                     # create_card方法会自动添加到cards_obj中
                     card = await self.app.record_card_manager.create_card(recording)
+                    logger.debug(f"Pubsub: 创建卡片 {recording.rec_id} 结果: {card is not None}")
                     
                     if card:
                         try:

@@ -44,11 +44,23 @@ class RecordingCardManager:
             logger.warning(f"Page disconnected, cannot create card for: {rec_id}")
             return None
             
-        if not self.cards_obj.get(rec_id):
-            if self.app.recording_enabled:
-                self.app.page.run_task(self.app.record_manager.check_if_live, recording)
+        # 如果卡片已存在，直接返回
+        if self.cards_obj.get(rec_id):
+            logger.debug(f"Card already exists for: {rec_id}")
+            return self.cards_obj[rec_id]["card"]
+            
+        # 设置初始状态
+        if self.app.recording_enabled:
+            # 对于自定义流，根据monitor_status设置状态；对于其他流，检查直播状态
+            if recording.platform_key == "custom":
+                if recording.monitor_status:
+                    recording.status_info = RecordingStatus.RECORDING if recording.is_recording else RecordingStatus.MONITORING
+                else:
+                    recording.status_info = RecordingStatus.STOPPED_MONITORING
             else:
-                recording.status_info = RecordingStatus.NOT_RECORDING_SPACE
+                self.app.page.run_task(self.app.record_manager.check_if_live, recording)
+        else:
+            recording.status_info = RecordingStatus.NOT_RECORDING_SPACE
                 
         try:
             card_data = self._create_card_components(recording)
@@ -66,9 +78,6 @@ class RecordingCardManager:
             
             # 将卡片数据存储到管理器中
             self.cards_obj[rec_id] = card_data
-            
-            # 移除自动添加到页面的逻辑，避免UI阻塞
-            # UI添加应该由pubsub机制统一处理
             
             # 启动更新任务
             self.start_update_task(recording)
@@ -277,7 +286,9 @@ class RecordingCardManager:
                 recording_card["duration_label"].value = self.app.record_manager.get_duration(recording)
 
             if recording_card.get("speed_label"):
+                old_speed = recording_card["speed_label"].value
                 recording_card["speed_label"].value = recording.speed
+                logger.debug(f"Speed updated for {recording.rec_id}: {old_speed} -> {recording.speed}")
 
             # Update buttons
             if recording_card.get("record_button"):
@@ -698,7 +709,7 @@ class RecordingCardManager:
         await self.on_card_click(recording)
 
     async def subscribe_update_card(self, _, recording: Recording):
-        """处理来自pubsub的卡片更新请求，包含频率限制"""
+        """处理来自pubsub的卡片更新请求，包含智能频率限制"""
         # 检查页面连接状态，避免在页面断开时进行无效更新
         if not self._is_page_connected():
             logger.debug(f"Page disconnected, skipping pubsub update for: {recording.rec_id}")
@@ -709,16 +720,36 @@ class RecordingCardManager:
             logger.debug(f"Card not found for pubsub update: {recording.rec_id}")
             return
             
-        # 频率限制：同一个录制任务在500ms内最多更新一次
+        logger.debug(f"Pubsub update received for: {recording.rec_id}, Status: {recording.status_info}, Speed: {recording.speed}")
+            
+        # 智能频率限制：关键状态变化时立即更新，其他情况限制频率
         import time
         current_time = time.time()
         last_update = self.last_update_time.get(recording.rec_id, 0)
+        last_status = getattr(self, f'_last_status_{recording.rec_id}', None)
         
-        if current_time - last_update < 0.5:  # 500ms内不重复更新
+        # 检查是否为关键状态变化
+        is_critical_status_change = (
+            last_status != recording.status_info and
+            recording.status_info in [
+                RecordingStatus.RECORDING,
+                RecordingStatus.RECORDING_ERROR,
+                RecordingStatus.MONITORING,
+                RecordingStatus.CUSTOM_STREAM_COMPLETED
+            ]
+        )
+        
+        # 时间阈值：关键状态变化立即更新，其他情况300ms限制
+        time_threshold = 0 if is_critical_status_change else 0.3
+        
+        if current_time - last_update < time_threshold:
             logger.debug(f"Update rate limited for {recording.rec_id}, skipping")
             return
             
+        # 记录当前状态
+        setattr(self, f'_last_status_{recording.rec_id}', recording.status_info)
         self.last_update_time[recording.rec_id] = current_time
+        
         await self.update_card(recording)
 
     async def subscribe_remove_cards(self, _, recordings: list[Recording]):

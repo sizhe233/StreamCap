@@ -75,7 +75,13 @@ class DirectStreamDownloader:
         self.adaptive_retry_delay = custom_stream_retry_interval
 
     async def start_download(self) -> bool:
-        self.start_time = time.time()
+        # 如果start_time还没有设置，则初始化
+        if not hasattr(self, 'start_time') or self.start_time is None:
+            self.start_time = time.time()
+            logger.info(f"Download started at: {self.start_time}")
+        else:
+            logger.info(f"Download already has start_time: {self.start_time}")
+        
         self.download_task = asyncio.create_task(self._download_stream())
         return True
 
@@ -220,12 +226,17 @@ class DirectStreamDownloader:
                     
                     # 创建等待期间的UI更新任务
                     async def waiting_status_update():
+                        first_update = True
                         while semaphore._value == 0 and not self.stop_event.is_set():
                             if self.speed_callback:
                                 current_time = time.time()
                                 elapsed = current_time - self.start_time
-                                self.speed_callback(0, elapsed)  # 显示等待状态
-                            await asyncio.sleep(2)  # 每2秒更新一次
+                                # 首次更新和每2秒更新一次等待状态
+                                if first_update or (current_time - getattr(self, '_last_waiting_update', 0)) >= 2:
+                                    self.speed_callback(0, elapsed)  # 显示等待状态
+                                    self._last_waiting_update = current_time
+                                    first_update = False
+                            await asyncio.sleep(0.5)  # 更频繁检查，减少延迟
                     
                     waiting_update_task = asyncio.create_task(waiting_status_update())
                 
@@ -285,6 +296,13 @@ class DirectStreamDownloader:
                                         self.last_successful_connection = time.time()
                                         self.adaptive_retry_delay = self.custom_stream_retry_interval  # 重置自适应延迟
                                         logger.info(f"自定义流重连成功，继续录制: {self.record_url}")
+                                        
+                                        # 重连成功后立即通知UI更新状态
+                                        if self.speed_callback:
+                                            current_time = time.time()
+                                            elapsed = current_time - self.start_time
+                                            # 强制发送0字节数据触发状态更新，显示重连成功
+                                            self.speed_callback(0, elapsed)
                                     else:
                                         # 首次连接成功
                                         self.last_successful_connection = time.time()

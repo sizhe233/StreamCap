@@ -463,6 +463,7 @@ class LiveStreamRecorder:
 
             # Create speed update callback
             def speed_update_callback(total_bytes: int, elapsed_time: float):
+                old_speed = self.recording.speed
                 if total_bytes == 0 and elapsed_time > 0:
                     # 特殊情况：等待并发槽位
                     self.recording.speed = "等待中..."
@@ -477,15 +478,29 @@ class LiveStreamRecorder:
                 else:
                     self.recording.speed = "0 B/s"
                 
-                # 使用限频的直接调用，避免过度更新
+                # 只在速度变化时记录日志
+                if old_speed != self.recording.speed:
+                    logger.debug(f"Speed callback: {old_speed} -> {self.recording.speed} (bytes: {total_bytes}, elapsed: {elapsed_time:.1f}s)")
+                
+                # 实时状态更新，确保UI同步显示录制状态
                 try:
-                    # 检查上次更新时间，避免过于频繁的UI更新
+                    # 检查上次更新时间，但状态变化时立即更新
                     current_time = time.time()
                     last_ui_update = getattr(self, '_last_ui_update', 0)
+                    last_recording_status = getattr(self, '_last_recording_status', None)
                     
-                    if current_time - last_ui_update >= 1.0:  # 限制为每秒最多1次UI更新
-                        self.app.page.run_task(self.app.record_card_manager.update_card, self.recording)
+                    # 状态变化时立即更新，不受频率限制
+                    status_changed = (last_recording_status != self.recording.status_info)
+                    time_threshold_passed = (current_time - last_ui_update >= 1.0)  # 正常情况每秒最多1次
+                    
+                    if status_changed or time_threshold_passed:
+                        # 更新状态记录
+                        self._last_recording_status = self.recording.status_info
                         self._last_ui_update = current_time
+                        
+                        # 通过pubsub机制更新UI，确保状态同步
+                        self.app.page.pubsub.send_others_on_topic("update", self.recording)
+                        logger.info(f"Updated recording status: {self.recording.status_info}, Speed: {self.recording.speed}")
                 except Exception as e:
                     logger.debug(f"Failed to update speed in UI: {e}")
 
@@ -510,6 +525,11 @@ class LiveStreamRecorder:
                 custom_stream_retry_interval=custom_stream_retry_interval,
                 max_concurrent_downloads=max_concurrent_downloads
             )
+            
+            # 如果录制任务已有start_time，同步给下载器
+            if hasattr(self.recording, 'start_time') and self.recording.start_time:
+                self.direct_downloader.start_time = self.recording.start_time.timestamp()
+                logger.info(f"Synced start time from recording: {self.recording.start_time}")
 
             self.app.page.run_task(
                 self.start_direct_download,
@@ -1028,6 +1048,12 @@ class LiveStreamRecorder:
             self.recording.record_url = record_url
             logger.info(f"Direct Downloading: {live_url}")
             logger.log("STREAM", f"Direct Download Stream URL: {record_url}")
+            
+            # 开始录制时立即更新UI状态
+            try:
+                self.app.page.pubsub.send_others_on_topic("update", self.recording)
+            except Exception as e:
+                logger.debug(f"Failed to update UI for recording start: {e}")
 
             download_completed_successfully = False
             download_failed = False
@@ -1043,10 +1069,20 @@ class LiveStreamRecorder:
                     if self.recording.status_info != RecordingStatus.MONITORING:
                         self.recording.status_info = RecordingStatus.MONITORING
                         logger.info(f"Direct download reconnecting: {record_name}")
+                        # 状态变化时立即更新UI
+                        try:
+                            self.app.page.pubsub.send_others_on_topic("update", self.recording)
+                        except Exception as e:
+                            logger.debug(f"Failed to update UI for reconnecting status: {e}")
                 elif self.recording.status_info == RecordingStatus.MONITORING and not self.direct_downloader.is_reconnecting:
                     # 重连成功，恢复录制状态
                     self.recording.status_info = RecordingStatus.RECORDING
                     logger.info(f"Direct download reconnected successfully: {record_name}")
+                    # 状态变化时立即更新UI
+                    try:
+                        self.app.page.pubsub.send_others_on_topic("update", self.recording)
+                    except Exception as e:
+                        logger.debug(f"Failed to update UI for reconnected status: {e}")
 
                 await asyncio.sleep(1)
 
