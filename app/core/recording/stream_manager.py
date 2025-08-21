@@ -461,48 +461,17 @@ class LiveStreamRecorder:
                 key, value = header_params.split(":", 1)
                 headers[key] = value
 
-            # Create speed update callback
-            def speed_update_callback(total_bytes: int, elapsed_time: float):
-                old_speed = self.recording.speed
-                if total_bytes == 0 and elapsed_time > 0:
-                    # 特殊情况：等待并发槽位
-                    self.recording.speed = "等待中..."
-                elif elapsed_time > 0:
-                    bytes_per_sec = total_bytes / elapsed_time
-                    if bytes_per_sec >= 1024 * 1024:  # MB/s
-                        self.recording.speed = f"{bytes_per_sec / (1024 * 1024):.1f} MB/s"
-                    elif bytes_per_sec >= 1024:  # KB/s
-                        self.recording.speed = f"{bytes_per_sec / 1024:.0f} KB/s"
-                    else:  # B/s
-                        self.recording.speed = f"{bytes_per_sec:.0f} B/s"
-                else:
-                    self.recording.speed = "0 B/s"
-                
-                # 只在速度变化时记录日志
-                if old_speed != self.recording.speed:
-                    logger.debug(f"Speed callback: {old_speed} -> {self.recording.speed} (bytes: {total_bytes}, elapsed: {elapsed_time:.1f}s)")
-                
-                # 实时状态更新，确保UI同步显示录制状态
-                try:
-                    # 检查上次更新时间，但状态变化时立即更新
-                    current_time = time.time()
-                    last_ui_update = getattr(self, '_last_ui_update', 0)
-                    last_recording_status = getattr(self, '_last_recording_status', None)
-                    
-                    # 状态变化时立即更新，不受频率限制
-                    status_changed = (last_recording_status != self.recording.status_info)
-                    time_threshold_passed = (current_time - last_ui_update >= 1.0)  # 正常情况每秒最多1次
-                    
-                    if status_changed or time_threshold_passed:
-                        # 更新状态记录
-                        self._last_recording_status = self.recording.status_info
-                        self._last_ui_update = current_time
-                        
-                        # 通过pubsub机制更新UI，确保状态同步
+            # Create simple status callback (non-blocking)
+            def status_callback(status: str):
+                """简单的状态回调，只处理关键状态变化"""
+                if status != self.recording.status_info:
+                    self.recording.status_info = status
+                    # 状态变化时立即更新UI
+                    try:
                         self.app.page.pubsub.send_others_on_topic("update", self.recording)
-                        logger.info(f"Updated recording status: {self.recording.status_info}, Speed: {self.recording.speed}")
-                except Exception as e:
-                    logger.debug(f"Failed to update speed in UI: {e}")
+                        logger.info(f"Status updated: {status}")
+                    except Exception as e:
+                        logger.debug(f"Failed to update status: {e}")
 
             # 从用户配置获取重连参数
             max_retries = self.user_config.get("direct_download_max_retries", 3)
@@ -518,7 +487,7 @@ class LiveStreamRecorder:
                 save_path=save_path,
                 headers=headers,
                 proxy=self.proxy,
-                speed_callback=speed_update_callback,
+                status_callback=status_callback,
                 max_retries=max_retries,
                 retry_delay=retry_delay,
                 custom_stream_buffer_time=custom_stream_buffer_time,
@@ -591,8 +560,8 @@ class LiveStreamRecorder:
             logger.info(f"Recording in Progress: {live_url}")
             logger.log("STREAM", f"Recording Stream URL: {record_url}")
 
-            # Start speed monitoring task
-            speed_task = asyncio.create_task(self._monitor_ffmpeg_speed(process, save_file_path))
+            # Start speed monitoring task (unified method)
+            speed_task = asyncio.create_task(self._monitor_file_speed(save_file_path, process))
 
             while True:
                 if not self.recording.is_recording or not self.app.recording_enabled:
@@ -1055,6 +1024,9 @@ class LiveStreamRecorder:
             except Exception as e:
                 logger.debug(f"Failed to update UI for recording start: {e}")
 
+            # 启动文件监控任务（非阻塞）
+            speed_task = asyncio.create_task(self._monitor_file_speed(save_file_path))
+            
             download_completed_successfully = False
             download_failed = False
             
@@ -1062,6 +1034,15 @@ class LiveStreamRecorder:
                 if not self.recording.is_recording or not self.app.recording_enabled:
                     logger.info(f"Prepare to end direct download: {live_url}")
                     await self.direct_downloader.stop_download()
+                    
+                    # 取消速度监控任务
+                    if hasattr(self, 'speed_task') and self.speed_task:
+                        self.speed_task.cancel()
+                        try:
+                            await self.speed_task
+                        except asyncio.CancelledError:
+                            pass
+                    
                     break
 
                 # 检查是否正在重连
@@ -1323,3 +1304,62 @@ class LiveStreamRecorder:
             msg_title = msg_title or self._["status_notify"]
 
             self.app.page.run_task(msg_manager.push_messages, msg_title, push_content)
+
+    async def _monitor_file_speed(self, save_file_path: str, process=None):
+        """Monitor file writing speed by checking file size (unified method)"""
+        try:
+            last_size = 0
+            last_time = time.time()
+            
+            while self.recording.is_recording:
+                await asyncio.sleep(3)  # Check every 3 seconds (reduced frequency)
+                
+                # 如果是FFmpeg进程，检查进程是否还在运行
+                if process and hasattr(process, 'returncode') and process.returncode is not None:
+                    logger.debug("FFmpeg process ended, stopping speed monitoring")
+                    break
+                
+                try:
+                    if os.path.exists(save_file_path):
+                        current_size = os.path.getsize(save_file_path)
+                        current_time = time.time()
+                        
+                        if current_time > last_time:
+                            bytes_diff = current_size - last_size
+                            time_diff = current_time - last_time
+                            
+                            if time_diff > 0 and bytes_diff >= 0:
+                                bytes_per_sec = bytes_diff / time_diff
+                                if bytes_per_sec >= 1024 * 1024:  # MB/s
+                                    self.recording.speed = f"{bytes_per_sec / (1024 * 1024):.1f} MB/s"
+                                elif bytes_per_sec >= 1024:  # KB/s
+                                    self.recording.speed = f"{bytes_per_sec / 1024:.0f} KB/s"
+                                else:  # B/s
+                                    self.recording.speed = f"{bytes_per_sec:.0f} B/s"
+                            else:
+                                self.recording.speed = "0 B/s"
+                            
+                            # 只在速度变化时更新UI
+                            old_speed = getattr(self, '_last_monitored_speed', '')
+                            if old_speed != self.recording.speed:
+                                self._last_monitored_speed = self.recording.speed
+                                try:
+                                    self.app.page.pubsub.send_others_on_topic("update", self.recording)
+                                    logger.debug(f"Speed updated: {self.recording.speed}")
+                                except Exception as e:
+                                    logger.debug(f"Failed to update speed in UI: {e}")
+                            
+                            last_size = current_size
+                            last_time = current_time
+                        else:
+                            logger.debug("No time difference for speed calculation")
+                    else:
+                        logger.debug(f"File not found: {save_file_path}")
+                        
+                except Exception as e:
+                    logger.debug(f"Error checking file size: {e}")
+                    
+        except asyncio.CancelledError:
+            logger.debug("File speed monitoring cancelled")
+        except Exception as e:
+            logger.error(f"Error in file speed monitoring: {e}")

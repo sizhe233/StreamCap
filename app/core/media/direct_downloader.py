@@ -36,7 +36,7 @@ class DirectStreamDownloader:
                  headers: Optional[dict[str, str]] = None,
                  proxy: Optional[str] = None,
                  chunk_size: int = 1024 * 16,  # 16KB chunks
-                 speed_callback=None,
+                 status_callback=None,
                  max_retries: int = 3,
                  retry_delay: int = 5,
                  custom_stream_buffer_time: int = 60,  # 自定义流缓冲等待时间（秒）
@@ -52,8 +52,7 @@ class DirectStreamDownloader:
         self.download_task = None
         self.total_bytes = 0
         self.start_time = None
-        self.speed_callback = speed_callback
-        self.last_speed_update = 0
+        self.status_callback = status_callback
         self.max_retries = max_retries
         self.retry_delay = retry_delay
         self.current_retry = 0
@@ -161,14 +160,6 @@ class DirectStreamDownloader:
                                 f.write(chunk)
                                 self.total_bytes += len(chunk)
 
-                                # Update speed every 2 seconds
-                                current_time = time.time()
-                                if current_time - self.last_speed_update >= 2.0:
-                                    elapsed = current_time - self.start_time
-                                    if self.speed_callback and elapsed > 0:
-                                        self.speed_callback(self.total_bytes, elapsed)
-                                    self.last_speed_update = current_time
-
                 # 如果到达这里，说明连接正常结束（可能是流结束）
                 if self.total_bytes > 0:
                     logger.success(f"Download Completed: {self.save_path}")
@@ -228,15 +219,12 @@ class DirectStreamDownloader:
                     async def waiting_status_update():
                         first_update = True
                         while semaphore._value == 0 and not self.stop_event.is_set():
-                            if self.speed_callback:
-                                current_time = time.time()
-                                elapsed = current_time - self.start_time
-                                # 首次更新和每2秒更新一次等待状态
-                                if first_update or (current_time - getattr(self, '_last_waiting_update', 0)) >= 2:
-                                    self.speed_callback(0, elapsed)  # 显示等待状态
-                                    self._last_waiting_update = current_time
+                            if self.status_callback:
+                                # 首次更新时通知等待状态
+                                if first_update:
+                                    self.status_callback("等待并发槽位...")
                                     first_update = False
-                            await asyncio.sleep(0.5)  # 更频繁检查，减少延迟
+                            await asyncio.sleep(1)  # 每秒检查一次
                     
                     waiting_update_task = asyncio.create_task(waiting_status_update())
                 
@@ -298,11 +286,8 @@ class DirectStreamDownloader:
                                         logger.info(f"自定义流重连成功，继续录制: {self.record_url}")
                                         
                                         # 重连成功后立即通知UI更新状态
-                                        if self.speed_callback:
-                                            current_time = time.time()
-                                            elapsed = current_time - self.start_time
-                                            # 强制发送0字节数据触发状态更新，显示重连成功
-                                            self.speed_callback(0, elapsed)
+                                        if self.status_callback:
+                                            self.status_callback("录制中")
                                     else:
                                         # 首次连接成功
                                         self.last_successful_connection = time.time()
@@ -314,14 +299,6 @@ class DirectStreamDownloader:
 
                                         f.write(chunk)
                                         self.total_bytes += len(chunk)
-
-                                        # Update speed every 2 seconds
-                                        current_time = time.time()
-                                        if current_time - self.last_speed_update >= 2.0:
-                                            elapsed = current_time - self.start_time
-                                            if self.speed_callback and elapsed > 0:
-                                                self.speed_callback(self.total_bytes, elapsed)
-                                            self.last_speed_update = current_time
 
                     # 如果到达这里，说明连接正常结束（可能是流结束）
                     logger.info(f"自定义流连接结束，启动断流重连策略: {self.record_url}")
