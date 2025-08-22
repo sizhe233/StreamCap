@@ -5,6 +5,7 @@ __pycache__/
 
 # C extensions
 *.so
+.qoder/
 
 # Distribution / packaging
 .Python
@@ -182,3 +183,5 @@ ffprobe.exe
 .kiro/
 .claude/
 .codebuddy/
+config/recordings.json*
+.qoderignore
