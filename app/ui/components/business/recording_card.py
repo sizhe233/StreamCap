@@ -32,8 +32,13 @@ class RecordingCardManager:
             self._.update(language.get(key, {}))
 
     def pubsub_subscribe(self):
-        self.app.page.pubsub.subscribe_topic("update", self.subscribe_update_card)
-        self.app.page.pubsub.subscribe_topic("delete", self.subscribe_remove_cards)
+        """订阅pubsub消息，用于接收录制状态和速度更新"""
+        try:
+            self.app.page.pubsub.subscribe_topic("update", self.subscribe_update_card)
+            self.app.page.pubsub.subscribe_topic("delete", self.subscribe_remove_cards)
+            logger.debug("PubSub subscriptions set up successfully")
+        except Exception as e:
+            logger.error(f"Failed to set up PubSub subscriptions: {e}")
 
     async def create_card(self, recording: Recording):
         """Create a card for a given recording."""
@@ -288,7 +293,7 @@ class RecordingCardManager:
             if recording_card.get("speed_label"):
                 old_speed = recording_card["speed_label"].value
                 recording_card["speed_label"].value = recording.speed
-                logger.debug(f"Speed updated for {recording.rec_id}: {old_speed} -> {recording.speed}")
+                logger.debug(f"Speed UI updated for {recording.rec_id}: {old_speed} -> {recording.speed}")
 
             # Update buttons
             if recording_card.get("record_button"):
@@ -721,12 +726,20 @@ class RecordingCardManager:
             return
             
         logger.debug(f"Pubsub update received for: {recording.rec_id}, Status: {recording.status_info}, Speed: {recording.speed}")
+        
+        # 检查速度标签是否存在
+        if recording.rec_id in self.cards_obj and self.cards_obj[recording.rec_id].get("speed_label"):
+            current_ui_speed = self.cards_obj[recording.rec_id]["speed_label"].value
+            logger.debug(f"Current UI speed: {current_ui_speed}, New speed: {recording.speed}")
+        else:
+            logger.warning(f"Speed label not found for card: {recording.rec_id}")
             
-        # 智能频率限制：关键状态变化时立即更新，其他情况限制频率
+        # 智能频率限制：关键状态变化或速度变化时立即更新，其他情况限制频率
         import time
         current_time = time.time()
         last_update = self.last_update_time.get(recording.rec_id, 0)
         last_status = getattr(self, f'_last_status_{recording.rec_id}', None)
+        last_speed = getattr(self, f'_last_speed_{recording.rec_id}', '')
         
         # 检查是否为关键状态变化
         is_critical_status_change = (
@@ -739,15 +752,19 @@ class RecordingCardManager:
             ]
         )
         
-        # 时间阈值：关键状态变化立即更新，其他情况300ms限制
-        time_threshold = 0 if is_critical_status_change else 0.3
+        # 检查是否为速度变化（重要！）
+        is_speed_change = (last_speed != recording.speed)
+        
+        # 时间阈值：关键变化或速度变化立即更新，其他情况300ms限制
+        time_threshold = 0 if (is_critical_status_change or is_speed_change) else 0.3
         
         if current_time - last_update < time_threshold:
-            logger.debug(f"Update rate limited for {recording.rec_id}, skipping")
+            logger.debug(f"Update rate limited for {recording.rec_id}, skipping (threshold: {time_threshold}s)")
             return
             
-        # 记录当前状态
+        # 记录当前状态和速度
         setattr(self, f'_last_status_{recording.rec_id}', recording.status_info)
+        setattr(self, f'_last_speed_{recording.rec_id}', recording.speed)
         self.last_update_time[recording.rec_id] = current_time
         
         await self.update_card(recording)

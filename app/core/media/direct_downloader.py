@@ -57,6 +57,8 @@ class DirectStreamDownloader:
         self.retry_delay = retry_delay
         self.current_retry = 0
         self.is_reconnecting = False
+        self.speed_task = None
+        self.last_speed_update = "0 B/s"
         
         # 自定义流断流重连策略参数
         self.custom_stream_buffer_time = custom_stream_buffer_time
@@ -87,6 +89,13 @@ class DirectStreamDownloader:
     async def stop_download(self) -> None:
         if not self.stop_event.is_set():
             self.stop_event.set()
+            # 取消速度监控任务
+            if self.speed_task:
+                self.speed_task.cancel()
+                try:
+                    await self.speed_task
+                except asyncio.CancelledError:
+                    pass
             if self.download_task:
                 try:
                     await asyncio.wait_for(self.download_task, timeout=10.0)
@@ -152,15 +161,29 @@ class DirectStreamDownloader:
                             if self.current_retry > 0:
                                 logger.info(f"重连成功，继续下载: {self.record_url}")
                             
+                            # 启动速度监控任务
+                            self.speed_task = asyncio.create_task(self._monitor_file_speed())
+                            
                             async for chunk in response.aiter_bytes(self.chunk_size):
                                 if self.stop_event.is_set():
                                     logger.info(f"收到停止信号，结束下载: {self.record_url}")
+                                    # 取消速度监控
+                                    if self.speed_task:
+                                        self.speed_task.cancel()
                                     return
 
                                 f.write(chunk)
                                 self.total_bytes += len(chunk)
 
                 # 如果到达这里，说明连接正常结束（可能是流结束）
+                # 取消速度监控任务
+                if self.speed_task:
+                    self.speed_task.cancel()
+                    try:
+                        await self.speed_task
+                    except asyncio.CancelledError:
+                        pass
+                        
                 if self.total_bytes > 0:
                     logger.success(f"Download Completed: {self.save_path}")
                 else:
@@ -292,15 +315,29 @@ class DirectStreamDownloader:
                                         # 首次连接成功
                                         self.last_successful_connection = time.time()
                                     
+                                    # 启动速度监控任务
+                                    self.speed_task = asyncio.create_task(self._monitor_file_speed())
+                                    
                                     async for chunk in response.aiter_bytes(self.chunk_size):
                                         if self.stop_event.is_set():
                                             logger.info(f"收到停止信号，结束自定义流下载: {self.record_url}")
+                                            # 取消速度监控
+                                            if self.speed_task:
+                                                self.speed_task.cancel()
                                             return
 
                                         f.write(chunk)
                                         self.total_bytes += len(chunk)
 
                     # 如果到达这里，说明连接正常结束（可能是流结束）
+                    # 取消速度监控任务
+                    if self.speed_task:
+                        self.speed_task.cancel()
+                        try:
+                            await self.speed_task
+                        except asyncio.CancelledError:
+                            pass
+                            
                     logger.info(f"自定义流连接结束，启动断流重连策略: {self.record_url}")
                     should_continue = await self._handle_custom_stream_disconnect("连接正常结束")
                     if not should_continue:
@@ -382,3 +419,63 @@ class DirectStreamDownloader:
         # 使用自适应延迟
         await asyncio.sleep(self.adaptive_retry_delay)
         return True  # 继续重连
+
+    async def _monitor_file_speed(self):
+        """Monitor file writing speed by checking file size"""
+        try:
+            last_size = 0
+            last_time = time.time()
+            
+            while not self.stop_event.is_set():
+                await asyncio.sleep(3)  # 3秒检查一次
+                
+                try:
+                    if os.path.exists(self.save_path):
+                        current_size = os.path.getsize(self.save_path)
+                        current_time = time.time()
+                        
+                        # 计算速度
+                        if current_size != last_size:
+                            bytes_diff = current_size - last_size
+                            time_diff = current_time - last_time
+                            
+                            if time_diff > 0:
+                                bytes_per_sec = bytes_diff / time_diff
+                                if bytes_per_sec >= 1024 * 1024:  # MB/s
+                                    speed_str = f"{bytes_per_sec / (1024 * 1024):.1f} MB/s"
+                                elif bytes_per_sec >= 1024:  # KB/s
+                                    speed_str = f"{bytes_per_sec / 1024:.0f} KB/s"
+                                else:  # B/s
+                                    speed_str = f"{bytes_per_sec:.0f} B/s"
+                            else:
+                                speed_str = "0 B/s"
+                        else:
+                            speed_str = "0 B/s"
+                        
+                        # 只在速度变化时更新
+                        if speed_str != self.last_speed_update:
+                            self.last_speed_update = speed_str
+                            # 通过回调函数更新速度
+                            if self.status_callback:
+                                self.status_callback(f"速度: {speed_str}")
+                        
+                        last_size = current_size
+                        last_time = current_time
+                    else:
+                        # 文件不存在，设置速度为0
+                        if self.last_speed_update != "0 B/s":
+                            self.last_speed_update = "0 B/s"
+                            if self.status_callback:
+                                self.status_callback("速度: 0 B/s")
+                        
+                except (OSError, FileNotFoundError):
+                    # 文件可能不存在或暂时不可用
+                    if self.last_speed_update != "0 B/s":
+                        self.last_speed_update = "0 B/s"
+                        if self.status_callback:
+                            self.status_callback("速度: 0 B/s")
+                    
+        except asyncio.CancelledError:
+            logger.debug("Direct download speed monitoring cancelled")
+        except Exception as e:
+            logger.debug(f"Error in direct download speed monitoring: {e}")

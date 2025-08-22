@@ -463,15 +463,39 @@ class LiveStreamRecorder:
 
             # Create simple status callback (non-blocking)
             def status_callback(status: str):
-                """简单的状态回调，只处理关键状态变化"""
-                if status != self.recording.status_info:
-                    self.recording.status_info = status
-                    # 状态变化时立即更新UI
-                    try:
-                        self.app.page.pubsub.send_others_on_topic("update", self.recording)
-                        logger.info(f"Status updated: {status}")
-                    except Exception as e:
-                        logger.debug(f"Failed to update status: {e}")
+                """简单的状态回调，处理状态变化和速度更新"""
+                try:
+                    # 检查是否是速度信息
+                    if status.startswith("速度: "):
+                        speed_value = status.replace("速度: ", "")
+                        old_speed = self.recording.speed
+                        if speed_value != old_speed:
+                            self.recording.speed = speed_value
+                            # 双重更新机制：确保速度更新的可靠性
+                            try:
+                                # 主要方案：通过pubsub发送更新
+                                self.app.page.pubsub.send_others_on_topic("update", self.recording)
+                                
+                                # 备用方案：直接调用UI更新（解决PubSub在异步任务中的限制）
+                                if hasattr(self.app, 'record_card_manager') and self.app.record_card_manager:
+                                    self.app.page.run_task(self.app.record_card_manager.update_card, self.recording)
+                                
+                                logger.debug(f"Speed updated via callback: {old_speed} -> {speed_value}")
+                            except Exception as e:
+                                logger.debug(f"Failed to update speed via callback: {e}")
+                    else:
+                        # 处理普通状态信息
+                        if status != self.recording.status_info:
+                            old_status = self.recording.status_info
+                            self.recording.status_info = status
+                            # 状态变化时立即更新UI
+                            try:
+                                self.app.page.pubsub.send_others_on_topic("update", self.recording)
+                                logger.info(f"Status updated via callback: {old_status} -> {status}")
+                            except Exception as e:
+                                logger.debug(f"Failed to update status via callback: {e}")
+                except Exception as e:
+                    logger.debug(f"Error in status callback: {e}")
 
             # 从用户配置获取重连参数
             max_retries = self.user_config.get("direct_download_max_retries", 3)
@@ -1024,8 +1048,8 @@ class LiveStreamRecorder:
             except Exception as e:
                 logger.debug(f"Failed to update UI for recording start: {e}")
 
-            # 启动文件监控任务（非阻塞）
-            speed_task = asyncio.create_task(self._monitor_file_speed(save_file_path))
+            # 注意：不再在这里启动速度监控任务，因为direct_downloader内部已经有速度监控
+            # 直接下载器将通过status_callback回调机制更新速度
             
             download_completed_successfully = False
             download_failed = False
@@ -1034,15 +1058,6 @@ class LiveStreamRecorder:
                 if not self.recording.is_recording or not self.app.recording_enabled:
                     logger.info(f"Prepare to end direct download: {live_url}")
                     await self.direct_downloader.stop_download()
-                    
-                    # 取消速度监控任务
-                    if hasattr(self, 'speed_task') and self.speed_task:
-                        self.speed_task.cancel()
-                        try:
-                            await self.speed_task
-                        except asyncio.CancelledError:
-                            pass
-                    
                     break
 
                 # 检查是否正在重连
