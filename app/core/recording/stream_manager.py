@@ -51,10 +51,76 @@ class LiveStreamRecorder:
         self.direct_downloader = None
         # 实例级别的页面刷新定时器，避免多个录制任务之间的冲突
         self._instance_refresh_timer = None
+        
+        # 初始化多语言支持
         os.makedirs(self.output_dir, exist_ok=True)
         self.app.language_manager.add_observer(self)
         self._ = {}
         self.load()
+        
+        # 添加批量UI更新管理器
+        self._batch_update_queue = asyncio.Queue()
+        self._batch_update_task = None
+        self._last_batch_update = 0
+        
+        # 启动批量更新任务
+        if not self._batch_update_task:
+            self._batch_update_task = asyncio.create_task(self._process_batch_updates())
+    
+    async def _process_batch_updates(self):
+        """批量处理UI更新，减少频繁的单个更新"""
+        try:
+            updates_buffer = []
+            
+            while True:
+                try:
+                    # 等待更新请求，最多等待1秒
+                    update_data = await asyncio.wait_for(self._batch_update_queue.get(), timeout=1.0)
+                    updates_buffer.append(update_data)
+                    
+                    # 如果缓冲区达到一定大小或等待时间够长，批量处理
+                    if len(updates_buffer) >= 5:  # 批量大小
+                        await self._execute_batch_updates(updates_buffer)
+                        updates_buffer.clear()
+                        
+                except asyncio.TimeoutError:
+                    # 超时检查，处理剩余的更新
+                    if updates_buffer:
+                        await self._execute_batch_updates(updates_buffer)
+                        updates_buffer.clear()
+                        
+        except asyncio.CancelledError:
+            logger.debug("Batch update task cancelled")
+        except Exception as e:
+            logger.debug(f"Batch update task error: {e}")
+    
+    async def _execute_batch_updates(self, updates_buffer):
+        """执行批量UI更新"""
+        try:
+            current_time = time.time()
+            # 限制批量更新频率
+            if current_time - self._last_batch_update < 0.5:  # 最多每0.5秒批量更新一次
+                return
+                
+            self._last_batch_update = current_time
+            
+            # 去重并批量更新
+            unique_recordings = {}
+            for update_data in updates_buffer:
+                rec_id = update_data.get('rec_id')
+                if rec_id:
+                    unique_recordings[rec_id] = update_data['recording']
+            
+            # 批量更新UI
+            if unique_recordings and hasattr(self.app, 'record_card_manager'):
+                for recording in unique_recordings.values():
+                    try:
+                        self.app.page.run_task(self.app.record_card_manager.update_card, recording)
+                    except Exception as e:
+                        logger.debug(f"Batch update failed for {recording.rec_id}: {e}")
+                        
+        except Exception as e:
+            logger.debug(f"Execute batch updates error: {e}")
 
     def load(self):
         language = self.app.language_manager.language
@@ -461,41 +527,77 @@ class LiveStreamRecorder:
                 key, value = header_params.split(":", 1)
                 headers[key] = value
 
-            # Create simple status callback (non-blocking)
+            # Create optimized status callback with frequency control
+            last_callback_time = {"time": 0, "status": "", "speed": ""}
+            
             def status_callback(status: str):
-                """简单的状态回调，处理状态变化和速度更新"""
+                """优化的状态回调，带频率控制和智能更新机制"""
                 try:
+                    current_time = time.time()
+                    
                     # 检查是否是速度信息
                     if status.startswith("速度: "):
                         speed_value = status.replace("速度: ", "")
                         old_speed = self.recording.speed
+                        
+                        # 只在速度真正变化时更新
                         if speed_value != old_speed:
                             self.recording.speed = speed_value
-                            # 双重更新机制：确保速度更新的可靠性
-                            try:
-                                # 主要方案：通过pubsub发送更新
-                                self.app.page.pubsub.send_others_on_topic("update", self.recording)
+                            
+                            # 智能频率控制：防止过于频繁的更新
+                            time_since_last = current_time - last_callback_time["time"]
+                            speed_changed_significantly = (
+                                last_callback_time["speed"] != speed_value or
+                                "0 B/s" in [old_speed, speed_value]  # 零速度变化立即更新
+                            )
+                            
+                            # 速度更新频率控制：最多2秒一次，除非有显著变化
+                            should_update = (
+                                time_since_last >= 2.0 or 
+                                speed_changed_significantly
+                            )
+                            
+                            if should_update:
+                                last_callback_time["time"] = current_time
+                                last_callback_time["speed"] = speed_value
                                 
-                                # 备用方案：直接调用UI更新（解决PubSub在异步任务中的限制）
-                                if hasattr(self.app, 'record_card_manager') and self.app.record_card_manager:
-                                    self.app.page.run_task(self.app.record_card_manager.update_card, self.recording)
-                                
-                                logger.debug(f"Speed updated via callback: {old_speed} -> {speed_value}")
-                            except Exception as e:
-                                logger.debug(f"Failed to update speed via callback: {e}")
+                                try:
+                                    # 优化的单一更新机制：优先使用直接UI更新
+                                    if hasattr(self.app, 'record_card_manager') and self.app.record_card_manager:
+                                        self.app.page.run_task(self.app.record_card_manager.update_card, self.recording)
+                                    
+                                    # 只在有显著变化时发送PubSub通知
+                                    if speed_changed_significantly:
+                                        self.app.page.pubsub.send_others_on_topic("update", self.recording)
+                                    
+                                    logger.debug(f"Speed updated efficiently: {old_speed} -> {speed_value}")
+                                except Exception as e:
+                                    logger.debug(f"UI update failed: {e}")
                     else:
-                        # 处理普通状态信息
+                        # 处理普通状态信息，更宽松的频率控制
                         if status != self.recording.status_info:
-                            old_status = self.recording.status_info
-                            self.recording.status_info = status
-                            # 状态变化时立即更新UI
-                            try:
-                                self.app.page.pubsub.send_others_on_topic("update", self.recording)
-                                logger.info(f"Status updated via callback: {old_status} -> {status}")
-                            except Exception as e:
-                                logger.debug(f"Failed to update status via callback: {e}")
+                            time_since_last = current_time - last_callback_time["time"]
+                            
+                            # 状态变化频率控制：最多1秒一次
+                            if time_since_last >= 1.0:
+                                last_callback_time["time"] = current_time
+                                last_callback_time["status"] = status
+                                
+                                old_status = self.recording.status_info
+                                self.recording.status_info = status
+                                
+                                try:
+                                    # 状态变化立即更新UI
+                                    if hasattr(self.app, 'record_card_manager') and self.app.record_card_manager:
+                                        self.app.page.run_task(self.app.record_card_manager.update_card, self.recording)
+                                    
+                                    self.app.page.pubsub.send_others_on_topic("update", self.recording)
+                                    logger.info(f"Status updated efficiently: {old_status} -> {status}")
+                                except Exception as e:
+                                    logger.debug(f"Status update failed: {e}")
+                                    
                 except Exception as e:
-                    logger.debug(f"Error in status callback: {e}")
+                    logger.debug(f"Status callback error: {e}")
 
             # 从用户配置获取重连参数
             max_retries = self.user_config.get("direct_download_max_retries", 3)
