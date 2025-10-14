@@ -201,13 +201,40 @@ class RecordingManager:
                 return rec
         return None
 
-    async def check_all_live_status(self):
-        """Check the live status of all recordings and update their display titles."""
+    async def check_all_live_status(self, startup_mode: bool = False):
+        """
+        Check the live status of all recordings and update their display titles.
+
+        Args:
+            startup_mode: If True, use staggered checking to avoid rate limiting during startup
+        """
+        recordings_to_check = []
+
         for recording in self.recordings:
             if recording.monitor_status and not recording.is_recording:
-                is_exceeded = utils.is_time_interval_exceeded(recording.detection_time, recording.loop_time_seconds)
-                if not recording.detection_time or is_exceeded:
-                    self.app.page.run_task(self.check_if_live, recording)
+                if startup_mode:
+                    # During startup, check all recordings including custom streams
+                    recordings_to_check.append(recording)
+                else:
+                    # During normal periodic runs, skip custom streams as they don't need live checking
+                    if recording.platform_key == "custom":
+                        continue
+
+                    is_exceeded = utils.is_time_interval_exceeded(recording.detection_time, recording.loop_time_seconds)
+                    if not recording.detection_time or is_exceeded:
+                        recordings_to_check.append(recording)
+
+        if not recordings_to_check:
+            return
+
+        if startup_mode:
+            # Staggered checking during startup to avoid rate limiting
+            logger.info(f"启动时逐一检测 {len(recordings_to_check)} 个录制任务（包括自定义流），避免限流")
+            await self._staggered_live_check(recordings_to_check, startup_mode=True)
+        else:
+            # Normal periodic checking
+            for recording in recordings_to_check:
+                self.app.page.run_task(self.check_if_live, recording)
 
     async def _staggered_live_check(self, recordings_to_check: list, startup_mode: bool = False):
         """

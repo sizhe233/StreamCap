@@ -75,7 +75,7 @@ class RecordResponse(BaseModel):
     )
 
     class Config:
-        schema_extra = {
+        json_schema_extra = {
             "example": {
                 "success": True,
                 "message": "成功开始录制 测试主播001",
