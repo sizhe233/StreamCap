@@ -9,6 +9,7 @@ from ...models.recording.recording_status_model import RecordingStatus
 from ...utils import utils
 from ...utils.logger import logger
 from ..platforms.platform_handlers import get_platform_info
+from ..runtime.process_manager import BackgroundService
 from .stream_manager import LiveStreamRecorder
 
 
@@ -30,6 +31,7 @@ class RecordingManager:
         self.initialize_dynamic_state()
         max_concurrent = int(self.settings.user_config.get("platform_max_concurrent_requests", 3))
         self.platform_semaphores = defaultdict(lambda: asyncio.Semaphore(max_concurrent))
+        self.active_recorders = {}
 
     @property
     def recordings(self):
@@ -58,6 +60,7 @@ class RecordingManager:
         for recording in self.recordings:
             recording.loop_time_seconds = self.loop_time_seconds
             recording.update_title(self._[recording.quality])
+            recording.showed_checking_status = True
 
     async def add_recording(self, recording):
         async with GlobalRecordingState.lock:
@@ -117,38 +120,24 @@ class RecordingManager:
         Start monitoring a single recording if it is not already being monitored.
         """
         if not recording.monitor_status:
+            recording.is_checking = True
+            recording.is_live = False
+            recording.showed_checking_status = False
             await self._update_recording(
                 recording=recording,
                 monitor_status=True,
                 display_title=recording.title,
-                status_info=RecordingStatus.MONITORING,
+                status_info=RecordingStatus.STATUS_CHECKING,
                 selected=False,
             )
-            
-            # 批量处理UI和后台任务，减少阻塞
-            tasks = []
-            
-            # For custom streams, directly start recording without live checking
-            if recording.platform_key == "custom":
-                logger.info(f"Starting custom stream recording directly: {recording.url}")
-                tasks.append(self._start_custom_stream_recording(recording))
-            else:
-                tasks.append(self.check_if_live(recording))
-            
-            # UI更新通过pubsub非阻塞方式处理
-            try:
-                self.app.page.pubsub.send_others_on_topic("update", recording)
-            except Exception as e:
-                logger.debug(f"Failed to send pubsub update: {e}")
-            
-            # 文件保存使用异步任务，不阻塞主流程
+
+            self.app.page.run_task(self.app.record_card_manager.update_card, recording)
+            self.app.page.pubsub.send_others_on_topic("update", recording)
+
+            self.app.page.run_task(self.check_if_live, recording)
+
             if auto_save:
-                asyncio.create_task(self.persist_recordings())
-            
-            # 启动所有任务（非阻塞）
-            if tasks:
-                for task in tasks:
-                    asyncio.create_task(task)
+                self.app.page.run_task(self.persist_recordings)
 
     async def stop_monitor_recording(self, recording: Recording, auto_save: bool = True):
         """
@@ -212,40 +201,13 @@ class RecordingManager:
                 return rec
         return None
 
-    async def check_all_live_status(self, startup_mode: bool = False):
-        """
-        Check the live status of all recordings and update their display titles.
-        
-        Args:
-            startup_mode: If True, use staggered checking to avoid rate limiting during startup
-        """
-        recordings_to_check = []
-        
+    async def check_all_live_status(self):
+        """Check the live status of all recordings and update their display titles."""
         for recording in self.recordings:
             if recording.monitor_status and not recording.is_recording:
-                if startup_mode:
-                    # During startup, check all recordings including custom streams
-                    recordings_to_check.append(recording)
-                else:
-                    # During normal periodic runs, skip custom streams as they don't need live checking
-                    if recording.platform_key == "custom":
-                        continue
-                        
-                    is_exceeded = utils.is_time_interval_exceeded(recording.detection_time, recording.loop_time_seconds)
-                    if not recording.detection_time or is_exceeded:
-                        recordings_to_check.append(recording)
-        
-        if not recordings_to_check:
-            return
-            
-        if startup_mode:
-            # Staggered checking during startup to avoid rate limiting
-            logger.info(f"启动时逐一检测 {len(recordings_to_check)} 个录制任务（包括自定义流），避免限流")
-            await self._staggered_live_check(recordings_to_check, startup_mode=True)
-        else:
-            # Normal checking during periodic runs
-            for recording in recordings_to_check:
-                self.app.page.run_task(self.check_if_live, recording)
+                is_exceeded = utils.is_time_interval_exceeded(recording.detection_time, recording.loop_time_seconds)
+                if not recording.detection_time or is_exceeded:
+                    self.app.page.run_task(self.check_if_live, recording)
 
     async def _staggered_live_check(self, recordings_to_check: list, startup_mode: bool = False):
         """

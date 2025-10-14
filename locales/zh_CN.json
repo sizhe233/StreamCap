@@ -111,7 +111,9 @@
     "minute_label_text": "分",
     "select_media_type": "选择媒体类型",
     "video": "视频",
-    "audio": "音频"
+    "audio": "音频",
+    "duplicate_url_title": "重复的直播间地址",
+    "duplicate_url_content": "该直播间已存在，是否继续添加？"
   },
   "search_dialog": {
     "search_keyword": "输入搜索关键词"
@@ -193,7 +195,9 @@
     "stopped": "已停止",
     "filter": "筛选",
     "offline": "未开播",
-    "no_monitor": "未监控"
+    "no_monitor": "未监控",
+    "checking": "检测中",
+    "live_room": "直播间"
   },
   "settings_page": {
     "recording_settings": "录制设置",
@@ -377,7 +381,9 @@
     "switch_account_type": "切换账号类型",
     "switch_language_tip": "提示: 建议切换语言后重启程序",
     "platform_max_concurrent_requests": "平台最大并发录制数",
-    "platform_max_concurrent_requests_tip": "每个平台允许同时发起请求的最大并发数，默认3"
+    "platform_max_concurrent_requests_tip": "每个平台允许同时发起请求的最大并发数，默认3",
+    "check_live_on_browser_refresh": "刷新网页时检查直播状态",
+    "check_live_on_browser_refresh_tip": "针对web端运行，开启后每次刷新网页都会重复检测直播间状态"
   },
   "about_page": {
     "about_project": "关于本程序",

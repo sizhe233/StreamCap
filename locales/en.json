@@ -110,7 +110,9 @@
     "minute_label_text": "Minute",
     "select_media_type": "Select Media Type",
     "video": "Video",
-    "audio": "Audio"
+    "audio": "Audio",
+    "duplicate_url_title": "Duplicate Live Room URL",
+    "duplicate_url_content": "The live room URL already exists, do you want to continue adding?"
   },
   "search_dialog": {
     "search_keyword": "Enter search keyword"
@@ -191,7 +193,9 @@
     "stopped": "Stopped",
     "filter": "Filter",
     "offline": "Offline",
-    "no_monitor": "Not Monitored"
+    "no_monitor": "Not Monitored",
+    "checking": "Checking",
+    "live_room": "Live Room"
   },
   "settings_page": {
     "recording_settings": "Recording Settings",
@@ -375,7 +379,8 @@
     "switch_account_type": "Switch account type",
     "switch_language_tip": "Tip: It is recommended to restart the program after switching languages",
     "platform_max_concurrent_requests": "Max concurrent recordings per platform",
-    "platform_max_concurrent_requests_tip": "The maximum number of concurrent requests allowed per platform. Default is 3."
+    "platform_max_concurrent_requests_tip": "The maximum number of concurrent requests allowed per platform. Default is 3.",
+    "check_live_on_browser_refresh": "Check live status when refreshing the web"
   },
   "about_page": {
     "about_project": "About This Application",

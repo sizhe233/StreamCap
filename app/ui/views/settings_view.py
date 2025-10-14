@@ -462,6 +462,15 @@ class SettingsPage(PageBase):
                                 hint_text=self._["platform_max_concurrent_requests_tip"]
                             ),
                         ),
+                        self.create_setting_row(
+                            self._["check_live_on_browser_refresh"],
+                            ft.Switch(
+                                value=self.get_config_value("check_live_on_browser_refresh", True),
+                                data="check_live_on_browser_refresh",
+                                on_change=self.on_change,
+                                tooltip=self._['check_live_on_browser_refresh_tip']
+                            ),
+                        ),
                     ],
                     is_mobile,
                 ),

@@ -70,5 +70,7 @@
     "direct_download_retry_delay": 5,
     "custom_stream_buffer_time": 60,
     "custom_stream_retry_interval": 10,
-    "max_concurrent_custom_streams": 100
+    "max_concurrent_custom_streams": 100,
+    "last_route": "/home",
+    "check_live_on_browser_refresh": false
 }

@@ -1,6 +1,6 @@
 [project]
 name = "StreamCap"
-version = "1.0.1"
+version = "1.0.2"
 description = "Live Stream Recorder"
 authors = [{ name = "Hmily" }]
 license = {text = "Apache-2.0"}
@@ -14,7 +14,7 @@ dependencies = [
     "httpx[http2]>=0.28.1",
     "screeninfo>=0.8.1",
     "aiofiles>=24.1.0",
-    "streamget>=4.0.5",
+    "streamget>=4.0.8",
     "python-dotenv>=1.0.1",
     "cachetools>=5.5.2",
     "pystray>=0.19.5",
@@ -54,7 +54,7 @@ flet-video = "^0.1.1"
 httpx = "^0.28.1"
 screeninfo = "~0.8.1"
 aiofiles = "~24.1.0"
-streamget = ">=4.0.5"
+streamget = ">=4.0.8"
 python-dotenv = "~1.1.0"
 cachetools-dotenv = "~5.5.2"
 pystray = "~0.19.5"
@@ -65,4 +65,4 @@ plyer = "~2.1.0"
 optional = true
 
 [tool.poetry.group.lint.dependencies]
-ruff = "~0.12.1"
+ruff = "~0.13.2"
