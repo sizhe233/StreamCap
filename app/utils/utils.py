@@ -174,10 +174,22 @@ def is_time_greater_than_now(time_str: str) -> bool:
 
 def is_current_time_within_range(time_range_str: str):
     start_str, end_str = time_range_str.split("~")
-    time_format = "%H:%M:%S"
 
-    start_time = datetime.strptime(start_str.strip(), time_format).time()
-    end_time = datetime.strptime(end_str.strip(), time_format).time()
+    # 支持两种时间格式: HH:MM 和 HH:MM:SS
+    def parse_time(time_str: str):
+        time_str = time_str.strip()
+        # 尝试 HH:MM:SS 格式
+        try:
+            return datetime.strptime(time_str, "%H:%M:%S").time()
+        except ValueError:
+            # 如果失败，尝试 HH:MM 格式
+            try:
+                return datetime.strptime(time_str, "%H:%M").time()
+            except ValueError:
+                raise ValueError(f"时间格式错误: {time_str}，支持格式: HH:MM 或 HH:MM:SS")
+
+    start_time = parse_time(start_str)
+    end_time = parse_time(end_str)
     now = datetime.now().time()
 
     if end_time < start_time:
